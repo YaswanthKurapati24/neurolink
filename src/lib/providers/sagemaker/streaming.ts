@@ -104,175 +104,359 @@ async function createProtocolSpecificStream(
   },
 ): Promise<ReadableStream<unknown>> {
   return new ReadableStream({
-    async start(controller) {
-      const reader = responseStream[Symbol.asyncIterator]();
-      let accumulatedText = "";
-      let finalUsage: SageMakerUsage | undefined;
+    async start(controller): Promise<void> {
+      const context = {
+        reader: responseStream[Symbol.asyncIterator](),
+        accumulatedText: "",
+        finalUsage: undefined as SageMakerUsage | undefined,
+        controller,
+        options,
+        parser,
+      };
 
       try {
         parser.reset();
-
-        while (true) {
-          // Check for abort signal
-          if (options.abortSignal?.aborted) {
-            throw new SageMakerError(
-              "Stream aborted by user",
-              "NETWORK_ERROR",
-              499,
-            );
-          }
-
-          const { done, value } = await reader.next();
-
-          if (done) {
-            // Stream ended - send final chunk if needed
-            if (!finalUsage && accumulatedText) {
-              finalUsage = estimateTokenUsage("", accumulatedText);
-            }
-
-            const finalChunk = {
-              type: "finish" as const,
-              finishReason: "stop" as const,
-              usage: finalUsage,
-            };
-
-            controller.enqueue(finalChunk);
-            options.onComplete?.(
-              finalUsage || {
-                promptTokens: 0,
-                completionTokens: 0,
-                totalTokens: 0,
-              },
-            );
-            controller.close();
-            break;
-          }
-
-          // Parse the chunk
-          const chunks = parser.parse(value);
-
-          for (const chunk of chunks) {
-            // Accumulate text content
-            if (chunk.content) {
-              accumulatedText += chunk.content;
-            }
-
-            // Phase 2.3: Handle streaming tool calls
-            if (chunk.toolCall) {
-              const toolCallPart = {
-                type: "tool-call-delta" as const,
-                toolCallType: "function" as const,
-                toolCallId: chunk.toolCall.id,
-                toolName: chunk.toolCall.name || "",
-                argsTextDelta: chunk.toolCall.argumentsDelta || "",
-              };
-
-              controller.enqueue(toolCallPart);
-              options.onChunk?.(chunk);
-
-              // If tool call is complete, send tool-call part
-              if (chunk.toolCall.complete && chunk.toolCall.arguments) {
-                const completedToolCall = {
-                  type: "tool-call" as const,
-                  toolCallType: "function" as const,
-                  toolCallId: chunk.toolCall.id,
-                  toolName: chunk.toolCall.name || "",
-                  args: JSON.parse(chunk.toolCall.arguments),
-                };
-
-                controller.enqueue(completedToolCall);
-              }
-
-              continue;
-            }
-
-            // Phase 2.3: Handle streaming tool results
-            if (chunk.toolResult) {
-              const toolResultPart = {
-                type: "tool-result" as const,
-                toolCallId: chunk.toolResult.toolCallId,
-                toolName: chunk.toolResult.toolName,
-                result: chunk.toolResult.result,
-                args: {}, // Tool args would be tracked separately
-              };
-
-              controller.enqueue(toolResultPart);
-              options.onChunk?.(chunk);
-              continue;
-            }
-
-            // Phase 2.3: Handle structured output streaming
-            if (chunk.structuredOutput) {
-              const structuredPart = {
-                type: "object-delta" as const,
-                objectDelta: chunk.structuredOutput.partialObject || {},
-                objectPath: chunk.structuredOutput.currentPath || "",
-                isComplete: chunk.structuredOutput.complete || false,
-                validationErrors: chunk.structuredOutput.validationErrors || [],
-              };
-
-              controller.enqueue(structuredPart);
-              options.onChunk?.(chunk);
-
-              // If structured output is complete, send object part
-              if (
-                chunk.structuredOutput.complete &&
-                chunk.structuredOutput.partialObject
-              ) {
-                const completedObject = {
-                  type: "object" as const,
-                  object: chunk.structuredOutput.partialObject,
-                };
-
-                controller.enqueue(completedObject);
-              }
-
-              continue;
-            }
-
-            // Regular text content
-            if (chunk.content) {
-              const streamPart = {
-                type: "text-delta" as const,
-                textDelta: chunk.content,
-              };
-
-              controller.enqueue(streamPart);
-              options.onChunk?.(chunk);
-            }
-
-            // Check for completion
-            if (parser.isComplete(chunk)) {
-              finalUsage =
-                parser.extractUsage(chunk) ||
-                estimateTokenUsage("", accumulatedText);
-
-              const finalChunk = {
-                type: "finish" as const,
-                finishReason: chunk.finishReason || "stop",
-                usage: finalUsage,
-              };
-
-              controller.enqueue(finalChunk);
-              options.onComplete?.(finalUsage);
-              controller.close();
-              return;
-            }
-          }
-        }
+        await processStreamingLoop(context);
       } catch (error) {
-        const sagemakerError = handleSageMakerError(error);
-        logger.error("Streaming error", {
-          error: sagemakerError.message,
-          modelType: capability.modelType,
-          protocol: capability.protocol,
-        });
-
-        options.onError?.(sagemakerError);
-        controller.error(sagemakerError);
+        handleStreamingError(error, context);
       }
     },
   });
+}
+
+/**
+ * Process the main streaming loop
+ */
+async function processStreamingLoop(context: {
+  reader: AsyncIterator<Uint8Array>;
+  accumulatedText: string;
+  finalUsage: SageMakerUsage | undefined;
+  controller: ReadableStreamDefaultController<unknown>;
+  options: {
+    abortSignal?: AbortSignal;
+    onChunk?: (chunk: SageMakerStreamChunk) => void;
+    onComplete?: (usage: SageMakerUsage) => void;
+    onError?: (error: Error) => void;
+  };
+  parser: unknown;
+}): Promise<void> {
+  while (true) {
+    checkAbortSignal(context.options.abortSignal);
+
+    const { done, value } = await context.reader.next();
+
+    if (done) {
+      handleStreamEnd(context);
+      break;
+    }
+
+    await processStreamChunks(value, context);
+  }
+}
+
+/**
+ * Check if stream should be aborted
+ */
+function checkAbortSignal(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new SageMakerError({
+      message: "Stream aborted by user",
+      code: "NETWORK_ERROR",
+      statusCode: 499,
+    });
+  }
+}
+
+/**
+ * Handle stream end
+ */
+function handleStreamEnd(context: {
+  accumulatedText: string;
+  finalUsage: SageMakerUsage | undefined;
+  controller: ReadableStreamDefaultController<unknown>;
+  options: {
+    onComplete?: (usage: SageMakerUsage) => void;
+  };
+}): void {
+  if (!context.finalUsage && context.accumulatedText) {
+    context.finalUsage = estimateTokenUsage("", context.accumulatedText);
+  }
+
+  const finalChunk = {
+    type: "finish" as const,
+    finishReason: "stop" as const,
+    usage: context.finalUsage,
+  };
+
+  context.controller.enqueue(finalChunk);
+  context.options.onComplete?.(
+    context.finalUsage || {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    },
+  );
+  context.controller.close();
+}
+
+/**
+ * Process stream chunks
+ */
+async function processStreamChunks(
+  value: Uint8Array,
+  context: {
+    accumulatedText: string;
+    finalUsage: SageMakerUsage | undefined;
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+      onComplete?: (usage: SageMakerUsage) => void;
+    };
+    parser: unknown;
+  },
+): Promise<void> {
+  const chunks = (
+    context.parser as {
+      parse: (value: string | Uint8Array) => SageMakerStreamChunk[];
+    }
+  ).parse(value);
+
+  for (const chunk of chunks) {
+    if (chunk.content) {
+      context.accumulatedText += chunk.content;
+    }
+
+    if (await processSpecialChunk(chunk, context)) {
+      continue;
+    }
+
+    processRegularContent(chunk, context);
+
+    if (
+      (
+        context.parser as {
+          isComplete: (chunk: SageMakerStreamChunk) => boolean;
+        }
+      ).isComplete(chunk)
+    ) {
+      handleChunkCompletion(chunk, context);
+      return;
+    }
+  }
+}
+
+/**
+ * Process special chunk types (tool calls, tool results, structured output)
+ */
+async function processSpecialChunk(
+  chunk: SageMakerStreamChunk,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+    };
+  },
+): Promise<boolean> {
+  if (chunk.toolCall) {
+    processToolCallChunk(chunk, context);
+    return true;
+  }
+
+  if (chunk.toolResult) {
+    processToolResultChunk(chunk, context);
+    return true;
+  }
+
+  if (chunk.structuredOutput) {
+    processStructuredOutputChunk(chunk, context);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Process tool call chunks
+ */
+function processToolCallChunk(
+  chunk: SageMakerStreamChunk,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+    };
+  },
+): void {
+  if (!chunk.toolCall) {
+    return;
+  }
+
+  const toolCallPart = {
+    type: "tool-call-delta" as const,
+    toolCallType: "function" as const,
+    toolCallId: chunk.toolCall.id,
+    toolName: chunk.toolCall.name || "",
+    argsTextDelta: chunk.toolCall.argumentsDelta || "",
+  };
+
+  context.controller.enqueue(toolCallPart);
+  context.options.onChunk?.(chunk);
+
+  if (chunk.toolCall.complete && chunk.toolCall.arguments) {
+    const completedToolCall = {
+      type: "tool-call" as const,
+      toolCallType: "function" as const,
+      toolCallId: chunk.toolCall.id,
+      toolName: chunk.toolCall.name || "",
+      args: JSON.parse(chunk.toolCall.arguments),
+    };
+
+    context.controller.enqueue(completedToolCall);
+  }
+}
+
+/**
+ * Process tool result chunks
+ */
+function processToolResultChunk(
+  chunk: SageMakerStreamChunk,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+    };
+  },
+): void {
+  if (!chunk.toolResult) {
+    return;
+  }
+
+  const toolResultPart = {
+    type: "tool-result" as const,
+    toolCallId: chunk.toolResult.toolCallId,
+    toolName: chunk.toolResult.toolName,
+    result: chunk.toolResult.result,
+    args: {},
+  };
+
+  context.controller.enqueue(toolResultPart);
+  context.options.onChunk?.(chunk);
+}
+
+/**
+ * Process structured output chunks
+ */
+function processStructuredOutputChunk(
+  chunk: SageMakerStreamChunk,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+    };
+  },
+): void {
+  if (!chunk.structuredOutput) {
+    return;
+  }
+
+  const structuredPart = {
+    type: "object-delta" as const,
+    objectDelta: chunk.structuredOutput.partialObject || {},
+    objectPath: chunk.structuredOutput.currentPath || "",
+    isComplete: chunk.structuredOutput.complete || false,
+    validationErrors: chunk.structuredOutput.validationErrors || [],
+  };
+
+  context.controller.enqueue(structuredPart);
+  context.options.onChunk?.(chunk);
+
+  if (chunk.structuredOutput.complete && chunk.structuredOutput.partialObject) {
+    const completedObject = {
+      type: "object" as const,
+      object: chunk.structuredOutput.partialObject,
+    };
+
+    context.controller.enqueue(completedObject);
+  }
+}
+
+/**
+ * Process regular content chunks
+ */
+function processRegularContent(
+  chunk: SageMakerStreamChunk,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onChunk?: (chunk: SageMakerStreamChunk) => void;
+    };
+  },
+): void {
+  if (chunk.content) {
+    const streamPart = {
+      type: "text-delta" as const,
+      textDelta: chunk.content,
+    };
+
+    context.controller.enqueue(streamPart);
+    context.options.onChunk?.(chunk);
+  }
+}
+
+/**
+ * Process regular content chunks
+ */
+function handleChunkCompletion(
+  chunk: SageMakerStreamChunk,
+  context: {
+    accumulatedText: string;
+    finalUsage: SageMakerUsage | undefined;
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onComplete?: (usage: SageMakerUsage) => void;
+    };
+    parser: unknown;
+  },
+): void {
+  context.finalUsage =
+    (
+      context.parser as {
+        extractUsage: (chunk: SageMakerStreamChunk) => SageMakerUsage | null;
+      }
+    ).extractUsage(chunk) || estimateTokenUsage("", context.accumulatedText);
+
+  const finalChunk = {
+    type: "finish" as const,
+    finishReason: chunk.finishReason || "stop",
+    usage: context.finalUsage,
+  };
+
+  context.controller.enqueue(finalChunk);
+  if (context.finalUsage) {
+    context.options.onComplete?.(context.finalUsage);
+  }
+  context.controller.close();
+}
+
+/**
+ * Handle streaming errors
+ */
+function handleStreamingError(
+  error: unknown,
+  context: {
+    controller: ReadableStreamDefaultController<unknown>;
+    options: {
+      onError?: (error: Error) => void;
+    };
+  },
+): void {
+  const sagemakerError = handleSageMakerError(error);
+  logger.error("Streaming error", {
+    error: sagemakerError.message,
+  });
+
+  context.options.onError?.(sagemakerError);
+  context.controller.error(sagemakerError);
 }
 
 /**
@@ -288,7 +472,7 @@ async function createSyntheticStreamFromResponse(
   },
 ): Promise<ReadableStream<unknown>> {
   return new ReadableStream({
-    async start(controller) {
+    async start(controller): Promise<void> {
       try {
         // Collect complete response
         const chunks: Uint8Array[] = [];
@@ -387,7 +571,7 @@ export async function createSyntheticStream(
   } = {},
 ): Promise<ReadableStream<unknown>> {
   return new ReadableStream({
-    start(controller) {
+    start(controller): void {
       // Send the complete text as a single delta
       const streamPart = {
         type: "text-delta" as const,

@@ -1,20 +1,15 @@
-import type {
-  AIProviderName,
-  TextGenerationOptions,
-  EnhancedGenerateResult,
-} from "../core/types.js";
+import type { AIProviderName } from "../core/types.js";
 import type {
   LanguageModelV1,
   LanguageModelV1CallOptions,
   LanguageModelV1StreamPart,
 } from "ai";
-import { streamText, Output } from "ai";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import type { ZodUnknownSchema } from "../types/typeAliases.js";
 import type { Schema } from "ai";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import { getDefaultTimeout, TimeoutError } from "../utils/timeout.js";
+import { TimeoutError } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS } from "../core/constants.js";
 import { modelConfig } from "../core/modelConfiguration.js";
 
@@ -66,8 +61,107 @@ class OllamaLanguageModel implements LanguageModelV1 {
     this.timeout = timeout;
   }
 
-  private estimateTokens(text: string): number {
+  public estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Setup stream reader for language model responses
+   */
+  private setupLanguageModelStreamReader(response: Response): {
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+    decoder: TextDecoder;
+  } {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No response body");
+    }
+    return { reader, decoder: new TextDecoder() };
+  }
+
+  /**
+   * Read and decode a stream chunk for language model
+   */
+  private async readLanguageModelStreamChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    decoder: TextDecoder,
+    currentBuffer: string,
+  ): Promise<{ done: boolean; buffer: string; newBuffer: string }> {
+    const { done, value } = await reader.read();
+    if (done) {
+      return { done: true, buffer: currentBuffer, newBuffer: currentBuffer };
+    }
+
+    const newBuffer = currentBuffer + decoder.decode(value, { stream: true });
+    return { done: false, buffer: currentBuffer, newBuffer };
+  }
+
+  /**
+   * Extract lines from buffer and update buffer with remaining content
+   */
+  private extractLines(buffer: string): string[] {
+    const lines = buffer.split("\n");
+    // The last element is kept in buffer for next iteration
+    lines.pop();
+    return lines;
+  }
+
+  /**
+   * Process a single line from language model stream
+   */
+  private processLanguageModelLine(line: string): {
+    shouldReturn: boolean;
+    chunk?: LanguageModelV1StreamPart;
+  } {
+    if (!line.trim()) {
+      return { shouldReturn: false };
+    }
+
+    try {
+      const data = JSON.parse(line);
+      return this.handleLanguageModelResponse(data);
+    } catch {
+      // Ignore JSON parse errors for incomplete chunks
+      return { shouldReturn: false };
+    }
+  }
+
+  /**
+   * Handle language model response data
+   */
+  private handleLanguageModelResponse(data: {
+    response?: string;
+    done?: boolean;
+    prompt_eval_count?: number;
+    eval_count?: number;
+    context?: string;
+  }): { shouldReturn: boolean; chunk?: LanguageModelV1StreamPart } {
+    if (data.response) {
+      return {
+        shouldReturn: false,
+        chunk: {
+          type: "text-delta",
+          textDelta: data.response,
+        },
+      };
+    }
+
+    if (data.done) {
+      return {
+        shouldReturn: true,
+        chunk: {
+          type: "finish",
+          finishReason: "stop",
+          usage: {
+            promptTokens:
+              data.prompt_eval_count || this.estimateTokens(data.context || ""),
+            completionTokens: data.eval_count || 0,
+          },
+        },
+      };
+    }
+
+    return { shouldReturn: false };
   }
 
   private convertMessagesToPrompt(
@@ -229,7 +323,7 @@ class OllamaLanguageModel implements LanguageModelV1 {
     const self = this;
     return {
       stream: new ReadableStream({
-        async start(controller) {
+        async start(controller): Promise<void> {
           try {
             for await (const chunk of self.parseStreamResponse(response)) {
               controller.enqueue(chunk);
@@ -257,51 +351,29 @@ class OllamaLanguageModel implements LanguageModelV1 {
   private async *parseStreamResponse(
     response: Response,
   ): AsyncGenerator<LanguageModelV1StreamPart> {
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("No response body");
-    }
-
-    const decoder = new TextDecoder();
+    const { reader, decoder } = this.setupLanguageModelStreamReader(response);
     let buffer = "";
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
+        const chunkResult = await this.readLanguageModelStreamChunk(
+          reader,
+          decoder,
+          buffer,
+        );
+        if (chunkResult.done) {
           break;
         }
+        buffer = chunkResult.buffer;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
+        const lines = this.extractLines(chunkResult.newBuffer);
         for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const data = JSON.parse(line);
-              if (data.response) {
-                yield {
-                  type: "text-delta",
-                  textDelta: data.response,
-                };
-              }
-              if (data.done) {
-                yield {
-                  type: "finish",
-                  finishReason: "stop",
-                  usage: {
-                    promptTokens:
-                      data.prompt_eval_count ||
-                      this.estimateTokens(data.context || ""),
-                    completionTokens: data.eval_count || 0,
-                  },
-                };
-                return;
-              }
-            } catch (error) {
-              // Ignore JSON parse errors for incomplete chunks
-            }
+          const result = this.processLanguageModelLine(line);
+          if (result.shouldReturn) {
+            return;
+          }
+          if (result.chunk) {
+            yield result.chunk;
           }
         }
       }
@@ -422,7 +494,7 @@ export class OllamaProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ZodUnknownSchema | Schema<unknown>,
+    _analysisSchema?: ZodUnknownSchema | Schema<unknown>,
   ): Promise<StreamResult> {
     try {
       this.validateStreamOptions(options);
@@ -434,10 +506,10 @@ export class OllamaProvider extends BaseProvider {
 
       if (modelSupportsTools && hasTools) {
         // Use chat API with tools for tool-capable models
-        return this.executeStreamWithTools(options, analysisSchema);
+        return this.executeStreamWithTools(options, _analysisSchema);
       } else {
         // Use generate API for non-tool scenarios
-        return this.executeStreamWithoutTools(options, analysisSchema);
+        return this.executeStreamWithoutTools(options, _analysisSchema);
       }
     } catch (error) {
       throw this.handleProviderError(error);
@@ -450,7 +522,7 @@ export class OllamaProvider extends BaseProvider {
    */
   private async executeStreamWithTools(
     options: StreamOptions,
-    analysisSchema?: ZodUnknownSchema | Schema<unknown>,
+    _analysisSchema?: ZodUnknownSchema | Schema<unknown>,
   ): Promise<StreamResult> {
     // Convert tools to Ollama format
     const ollamaTools = this.convertToolsToOllamaFormat(options.tools);
@@ -484,12 +556,14 @@ export class OllamaProvider extends BaseProvider {
         status: response.status,
         statusText: response.statusText,
       });
-      return this.executeStreamWithoutTools(options, analysisSchema);
+      return this.executeStreamWithoutTools(options, _analysisSchema);
     }
 
     // Transform to async generator with tool call handling
     const self = this;
-    const transformedStream = async function* () {
+    const transformedStream = async function* (): AsyncGenerator<{
+      content: string;
+    }> {
       const generator = self.createOllamaChatStream(response, options.tools);
       for await (const chunk of generator) {
         yield chunk;
@@ -509,7 +583,7 @@ export class OllamaProvider extends BaseProvider {
    */
   private async executeStreamWithoutTools(
     options: StreamOptions,
-    analysisSchema?: ZodUnknownSchema | Schema<unknown>,
+    _analysisSchema?: ZodUnknownSchema | Schema<unknown>,
   ): Promise<StreamResult> {
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: "POST",
@@ -535,7 +609,9 @@ export class OllamaProvider extends BaseProvider {
 
     // Transform to async generator to match other providers
     const self = this;
-    const transformedStream = async function* () {
+    const transformedStream = async function* (): AsyncGenerator<{
+      content: string;
+    }> {
       const generator = self.createOllamaStream(response);
       for await (const chunk of generator) {
         yield chunk;
@@ -590,59 +666,27 @@ export class OllamaProvider extends BaseProvider {
    */
   private async *createOllamaChatStream(
     response: Response,
-    tools?: unknown,
+    _tools?: unknown,
   ): AsyncGenerator<{ content: string }> {
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("No response body");
-    }
-
-    const decoder = new TextDecoder();
+    const { reader, decoder } = this.setupStreamReader(response);
     let buffer = "";
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
+        const chunkResult = await this.readStreamChunk(reader, decoder, buffer);
+        if (chunkResult.done) {
           break;
         }
+        buffer = chunkResult.buffer;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
+        const lines = this.extractLines(chunkResult.newBuffer);
         for (const line of lines) {
-          if (line.trim() && line.startsWith("data: ")) {
-            const dataLine = line.slice(6); // Remove "data: " prefix
-            if (dataLine === "[DONE]") {
-              return;
-            }
-
-            try {
-              const data = JSON.parse(dataLine);
-              const delta = data.choices?.[0]?.delta;
-
-              if (delta?.content) {
-                yield { content: delta.content };
-              }
-
-              if (delta?.tool_calls) {
-                // Handle tool calls - for now, we'll include them as content
-                // Future enhancement: Execute tools and return results
-                const toolCallDescription = this.formatToolCallForDisplay(
-                  delta.tool_calls,
-                );
-                if (toolCallDescription) {
-                  yield { content: toolCallDescription };
-                }
-              }
-
-              if (data.choices?.[0]?.finish_reason) {
-                return;
-              }
-            } catch (error) {
-              // Ignore JSON parse errors for incomplete chunks
-            }
+          const result = this.processChatStreamLine(line, _tools);
+          if (result.shouldReturn) {
+            return;
+          }
+          if (result.content) {
+            yield result.content;
           }
         }
       }
@@ -666,35 +710,286 @@ export class OllamaProvider extends BaseProvider {
       return "";
     }
 
-    const descriptions = toolCalls.map(
-      (call: {
-        function?: {
-          name?: string;
-          arguments?: string;
-        };
-      }) => {
-        const functionName = call.function?.name || "unknown_function";
-        let args = {};
-        if (call.function?.arguments) {
-          try {
-            args = JSON.parse(call.function.arguments);
-          } catch (error) {
-            // If arguments are malformed, preserve for debugging while marking as invalid
-            logger.warn?.(
-              "Malformed tool call arguments: " + call.function.arguments,
-            );
-            args = {
-              _malformed: true,
-              _originalArguments: call.function.arguments,
-              _error: error instanceof Error ? error.message : String(error),
-            };
-          }
-        }
-        return `\n[Tool Call: ${functionName}(${JSON.stringify(args)})]`;
-      },
+    const descriptions = toolCalls.map((call) =>
+      this.formatSingleToolCall(call),
     );
-
     return descriptions.join("");
+  }
+
+  /**
+   * Format a single tool call for display
+   */
+  private formatSingleToolCall(call: {
+    function?: {
+      name?: string;
+      arguments?: string;
+    };
+  }): string {
+    const functionName = call.function?.name || "unknown_function";
+    const args = this.parseToolCallArguments(call.function?.arguments);
+    return `\n[Tool Call: ${functionName}(${JSON.stringify(args)})]`;
+  }
+
+  /**
+   * Parse tool call arguments with error handling
+   */
+  private parseToolCallArguments(
+    argumentsString?: string,
+  ): Record<string, unknown> {
+    if (!argumentsString) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(argumentsString);
+    } catch (error) {
+      logger.warn?.("Malformed tool call arguments: " + argumentsString);
+      return {
+        _malformed: true,
+        _originalArguments: argumentsString,
+        _error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Setup stream reader and decoder for response processing
+   */
+  private setupStreamReader(response: Response): {
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+    decoder: TextDecoder;
+  } {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No response body");
+    }
+    return { reader, decoder: new TextDecoder() };
+  }
+
+  /**
+   * Setup stream reader for language model responses
+   */
+  private setupLanguageModelStreamReader(response: Response): {
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+    decoder: TextDecoder;
+  } {
+    return this.setupStreamReader(response);
+  }
+
+  /**
+   * Read and decode a stream chunk
+   */
+  private async readStreamChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    decoder: TextDecoder,
+    currentBuffer: string,
+  ): Promise<{ done: boolean; buffer: string; newBuffer: string }> {
+    const { done, value } = await reader.read();
+    if (done) {
+      return { done: true, buffer: currentBuffer, newBuffer: currentBuffer };
+    }
+
+    const newBuffer = currentBuffer + decoder.decode(value, { stream: true });
+    return { done: false, buffer: currentBuffer, newBuffer };
+  }
+
+  /**
+   * Read and decode a stream chunk for language model
+   */
+  private async readLanguageModelStreamChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    decoder: TextDecoder,
+    currentBuffer: string,
+  ): Promise<{ done: boolean; buffer: string; newBuffer: string }> {
+    return this.readStreamChunk(reader, decoder, currentBuffer);
+  }
+
+  /**
+   * Extract lines from buffer and update buffer with remaining content
+   */
+  private extractLines(buffer: string): string[] {
+    const lines = buffer.split("\n");
+    // The last element is kept in buffer for next iteration
+    lines.pop();
+    return lines;
+  }
+
+  /**
+   * Process a single line from chat stream
+   */
+  private processChatStreamLine(
+    line: string,
+    tools?: unknown,
+  ): { shouldReturn: boolean; content?: { content: string } } {
+    if (!this.isValidChatLine(line)) {
+      return { shouldReturn: false };
+    }
+
+    const dataLine = line.slice(6); // Remove "data: " prefix
+    if (dataLine === "[DONE]") {
+      return { shouldReturn: true };
+    }
+
+    return this.parseAndHandleChatData(dataLine, tools);
+  }
+
+  /**
+   * Check if a line is valid for chat API processing
+   */
+  private isValidChatLine(line: string): boolean {
+    return line.trim() !== "" && line.startsWith("data: ");
+  }
+
+  /**
+   * Parse and handle chat data from a line
+   */
+  private parseAndHandleChatData(
+    dataLine: string,
+    tools?: unknown,
+  ): { shouldReturn: boolean; content?: { content: string } } {
+    try {
+      const data = JSON.parse(dataLine);
+      return this.handleChatDelta(data, tools);
+    } catch {
+      // Ignore JSON parse errors for incomplete chunks
+      return { shouldReturn: false };
+    }
+  }
+
+  /**
+   * Handle chat delta data and extract content or tool calls
+   */
+  private handleChatDelta(
+    data: {
+      choices?: Array<{
+        delta?: { content?: string; tool_calls?: unknown };
+        finish_reason?: string;
+      }>;
+    },
+    _tools?: unknown,
+  ): { shouldReturn: boolean; content?: { content: string } } {
+    const delta = data.choices?.[0]?.delta;
+
+    if (delta?.content) {
+      return { shouldReturn: false, content: { content: delta.content } };
+    }
+
+    if (delta?.tool_calls) {
+      const toolCallDescription = this.formatToolCallForDisplay(
+        delta.tool_calls as Array<{
+          function?: { name?: string; arguments?: string };
+        }>,
+      );
+      if (toolCallDescription) {
+        return {
+          shouldReturn: false,
+          content: { content: toolCallDescription },
+        };
+      }
+    }
+
+    if (data.choices?.[0]?.finish_reason) {
+      return { shouldReturn: true };
+    }
+
+    return { shouldReturn: false };
+  }
+
+  /**
+   * Process a single line from generate stream
+   */
+  private processGenerateStreamLine(line: string): {
+    shouldReturn: boolean;
+    content?: { content: string };
+  } {
+    if (!line.trim()) {
+      return { shouldReturn: false };
+    }
+
+    try {
+      const data = JSON.parse(line);
+      return this.handleGenerateResponse(data);
+    } catch {
+      // Ignore JSON parse errors for incomplete chunks
+      return { shouldReturn: false };
+    }
+  }
+
+  /**
+   * Handle generate API response data
+   */
+  private handleGenerateResponse(data: { response?: string; done?: boolean }): {
+    shouldReturn: boolean;
+    content?: { content: string };
+  } {
+    if (data.response) {
+      return { shouldReturn: false, content: { content: data.response } };
+    }
+
+    if (data.done) {
+      return { shouldReturn: true };
+    }
+
+    return { shouldReturn: false };
+  }
+
+  /**
+   * Process a single line from language model stream
+   */
+  private processLanguageModelLine(line: string): {
+    shouldReturn: boolean;
+    chunk?: LanguageModelV1StreamPart;
+  } {
+    if (!line.trim()) {
+      return { shouldReturn: false };
+    }
+
+    try {
+      const data = JSON.parse(line);
+      return this.handleLanguageModelResponse(data);
+    } catch {
+      // Ignore JSON parse errors for incomplete chunks
+      return { shouldReturn: false };
+    }
+  }
+
+  /**
+   * Handle language model response data
+   */
+  private handleLanguageModelResponse(data: {
+    response?: string;
+    done?: boolean;
+    prompt_eval_count?: number;
+    eval_count?: number;
+    context?: string;
+  }): { shouldReturn: boolean; chunk?: LanguageModelV1StreamPart } {
+    if (data.response) {
+      return {
+        shouldReturn: false,
+        chunk: {
+          type: "text-delta",
+          textDelta: data.response,
+        },
+      };
+    }
+
+    if (data.done) {
+      return {
+        shouldReturn: true,
+        chunk: {
+          type: "finish",
+          finishReason: "stop",
+          usage: {
+            promptTokens:
+              data.prompt_eval_count ||
+              this.ollamaModel.estimateTokens(data.context || ""),
+            completionTokens: data.eval_count || 0,
+          },
+        },
+      };
+    }
+
+    return { shouldReturn: false };
   }
 
   /**
@@ -703,38 +998,25 @@ export class OllamaProvider extends BaseProvider {
   private async *createOllamaStream(
     response: Response,
   ): AsyncGenerator<{ content: string }> {
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("No response body");
-    }
-
-    const decoder = new TextDecoder();
+    const { reader, decoder } = this.setupStreamReader(response);
     let buffer = "";
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
+        const chunkResult = await this.readStreamChunk(reader, decoder, buffer);
+        if (chunkResult.done) {
           break;
         }
+        buffer = chunkResult.buffer;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
+        const lines = this.extractLines(chunkResult.newBuffer);
         for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const data = JSON.parse(line);
-              if (data.response) {
-                yield { content: data.response };
-              }
-              if (data.done) {
-                return;
-              }
-            } catch (error) {
-              // Ignore JSON parse errors for incomplete chunks
-            }
+          const result = this.processGenerateStreamLine(line);
+          if (result.shouldReturn) {
+            return;
+          }
+          if (result.content) {
+            yield result.content;
           }
         }
       }

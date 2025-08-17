@@ -22,21 +22,27 @@ export const mockProviderConfig = {
 };
 
 // Test utility functions
-export function createMockProvider(name: string) {
+export function createMockProvider(name: string): {
+  name: string;
+  generate: () => Promise<{ content: string }>;
+  getConfig: () => { apiKey?: string; baseUrl?: string };
+} {
   return {
     name,
-    generate: async () => ({ content: `Mock response from ${name}` }),
-    getConfig: () =>
+    generate: async (): Promise<{ content: string }> => ({
+      content: `Mock response from ${name}`,
+    }),
+    getConfig: (): { apiKey?: string; baseUrl?: string } =>
       mockProviderConfig[name as keyof typeof mockProviderConfig],
   };
 }
 
 // Setup logging for tests
-export function setupTestLogging() {
+export function setupTestLogging(): void {
   // Suppress logs during testing unless DEBUG=1
   if (!process.env.DEBUG) {
-    console.log = () => {};
-    console.debug = () => {};
+    console.log = (): void => {};
+    console.debug = (): void => {};
   }
 }
 

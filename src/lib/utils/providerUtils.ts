@@ -140,7 +140,7 @@ async function isProviderAvailable(providerName: string): Promise<boolean> {
         return models.some((m: UnknownRecord) => m.name === defaultOllamaModel);
       }
       return false;
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -149,7 +149,7 @@ async function isProviderAvailable(providerName: string): Promise<boolean> {
     const provider = await AIProviderFactory.createProvider(providerName);
     await provider.generate({ prompt: "test", maxTokens: 1 });
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
@@ -190,70 +190,107 @@ export function validateProviderEnvVars(
     warnings: [],
   };
 
-  switch (provider.toLowerCase()) {
-    case "bedrock":
-    case "amazon":
-    case "aws":
-      validateAwsCredentials(result);
-      break;
+  const normalizedProvider = provider.toLowerCase();
 
-    case "vertex":
-    case "googlevertex":
-    case "google":
-    case "gemini":
-      validateVertexCredentials(result);
-      break;
-
-    case "openai":
-    case "gpt":
-      validateOpenAICredentials(result);
-      break;
-
-    case "anthropic":
-    case "claude":
-      validateAnthropicCredentials(result);
-      break;
-
-    case "azure":
-    case "azureOpenai":
-      validateAzureCredentials(result);
-      break;
-
-    case "google-ai":
-    case "google-studio":
-      validateGoogleAICredentials(result);
-      break;
-
-    case "huggingface":
-    case "hugging-face":
-    case "hf":
-      validateHuggingFaceCredentials(result);
-      break;
-
-    case "mistral":
-    case "mistral-ai":
-    case "mistralai":
-      validateMistralCredentials(result);
-      break;
-
-    case "ollama":
-    case "local":
-    case "local-ollama":
-      // Ollama doesn't require environment variables
-      break;
-
-    case "litellm":
-      // LiteLLM validation can be added if needed
-      break;
-
-    default:
-      result.isValid = false;
-      result.warnings.push(`Unknown provider: ${provider}`);
+  // Group validation by provider type
+  if (isAwsProvider(normalizedProvider)) {
+    validateAwsCredentials(result);
+  } else if (isVertexProvider(normalizedProvider)) {
+    validateVertexCredentials(result);
+  } else if (isOpenAiProvider(normalizedProvider)) {
+    validateOpenAICredentials(result);
+  } else if (isAnthropicProvider(normalizedProvider)) {
+    validateAnthropicCredentials(result);
+  } else if (isAzureProvider(normalizedProvider)) {
+    validateAzureCredentials(result);
+  } else if (isGoogleAiProvider(normalizedProvider)) {
+    validateGoogleAICredentials(result);
+  } else if (isHuggingFaceProvider(normalizedProvider)) {
+    validateHuggingFaceCredentials(result);
+  } else if (isMistralProvider(normalizedProvider)) {
+    validateMistralCredentials(result);
+  } else if (isOllamaProvider(normalizedProvider)) {
+    // Ollama doesn't require environment variables
+  } else if (isLiteLlmProvider(normalizedProvider)) {
+    // LiteLLM validation can be added if needed
+  } else {
+    result.isValid = false;
+    result.warnings.push(`Unknown provider: ${provider}`);
   }
 
   result.isValid =
     result.missingVars.length === 0 && result.invalidVars.length === 0;
   return result;
+}
+
+/**
+ * Check if provider is AWS-based
+ */
+function isAwsProvider(provider: string): boolean {
+  return ["bedrock", "amazon", "aws"].includes(provider);
+}
+
+/**
+ * Check if provider is Vertex-based
+ */
+function isVertexProvider(provider: string): boolean {
+  return ["vertex", "googlevertex", "google", "gemini"].includes(provider);
+}
+
+/**
+ * Check if provider is OpenAI-based
+ */
+function isOpenAiProvider(provider: string): boolean {
+  return ["openai", "gpt"].includes(provider);
+}
+
+/**
+ * Check if provider is Anthropic-based
+ */
+function isAnthropicProvider(provider: string): boolean {
+  return ["anthropic", "claude"].includes(provider);
+}
+
+/**
+ * Check if provider is Azure-based
+ */
+function isAzureProvider(provider: string): boolean {
+  return ["azure", "azureopenai"].includes(provider);
+}
+
+/**
+ * Check if provider is Google AI-based
+ */
+function isGoogleAiProvider(provider: string): boolean {
+  return ["google-ai", "google-studio"].includes(provider);
+}
+
+/**
+ * Check if provider is HuggingFace-based
+ */
+function isHuggingFaceProvider(provider: string): boolean {
+  return ["huggingface", "hugging-face", "hf"].includes(provider);
+}
+
+/**
+ * Check if provider is Mistral-based
+ */
+function isMistralProvider(provider: string): boolean {
+  return ["mistral", "mistral-ai", "mistralai"].includes(provider);
+}
+
+/**
+ * Check if provider is Ollama-based
+ */
+function isOllamaProvider(provider: string): boolean {
+  return ["ollama", "local", "local-ollama"].includes(provider);
+}
+
+/**
+ * Check if provider is LiteLLM-based
+ */
+function isLiteLlmProvider(provider: string): boolean {
+  return provider === "litellm";
 }
 
 /**
@@ -456,73 +493,157 @@ function isValidUrl(url: string): boolean {
  * @returns True if the provider has required environment variables
  */
 export function hasProviderEnvVars(provider: string): boolean {
-  switch (provider.toLowerCase()) {
-    case "bedrock":
-    case "amazon":
-    case "aws":
-      return !!(
-        process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
-      );
+  const normalizedProvider = provider.toLowerCase();
 
-    case "vertex":
-    case "googlevertex":
-    case "google":
-    case "gemini":
-      return !!(
-        (process.env.GOOGLE_CLOUD_PROJECT_ID ||
-          process.env.VERTEX_PROJECT_ID ||
-          process.env.GOOGLE_VERTEX_PROJECT ||
-          process.env.GOOGLE_CLOUD_PROJECT) &&
-        (process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-          process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
-          (process.env.GOOGLE_AUTH_CLIENT_EMAIL &&
-            process.env.GOOGLE_AUTH_PRIVATE_KEY))
-      );
-
-    case "openai":
-    case "gpt":
-      return !!process.env.OPENAI_API_KEY;
-
-    case "anthropic":
-    case "claude":
-      return !!process.env.ANTHROPIC_API_KEY;
-
-    case "azure":
-    case "azureOpenai":
-      return !!process.env.AZURE_OPENAI_API_KEY;
-
-    case "google-ai":
-    case "google-studio":
-      return !!(
-        process.env.GOOGLE_AI_API_KEY ||
-        process.env.GOOGLE_GENERATIVE_AI_API_KEY
-      );
-
-    case "huggingface":
-    case "hugging-face":
-    case "hf":
-      return !!(process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN);
-
-    case "ollama":
-    case "local":
-    case "local-ollama":
-      // For Ollama, we check if the service is potentially available
-      // This is a basic check - actual connectivity will be verified during usage
-      return true; // Ollama doesn't require environment variables, just local service
-
-    case "mistral":
-    case "mistral-ai":
-    case "mistralai":
-      return !!process.env.MISTRAL_API_KEY;
-
-    case "litellm":
-      // LiteLLM requires a proxy server, which can be checked for availability
-      // Default base URL is assumed, or can be configured via environment
-      return true; // LiteLLM proxy availability will be checked during usage
-
-    default:
-      return false;
+  if (hasAwsProviderEnvVars(normalizedProvider)) {
+    return true;
   }
+  if (hasVertexProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasOpenAiProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasAnthropicProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasAzureProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasGoogleAiProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasHuggingFaceProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasMistralProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasOllamaProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+  if (hasLiteLlmProviderEnvVars(normalizedProvider)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check AWS provider environment variables
+ */
+function hasAwsProviderEnvVars(provider: string): boolean {
+  if (!["bedrock", "amazon", "aws"].includes(provider)) {
+    return false;
+  }
+  return !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+}
+
+/**
+ * Check Vertex provider environment variables
+ */
+function hasVertexProviderEnvVars(provider: string): boolean {
+  if (!["vertex", "googlevertex", "google", "gemini"].includes(provider)) {
+    return false;
+  }
+
+  const hasProject = !!(
+    process.env.GOOGLE_CLOUD_PROJECT_ID ||
+    process.env.VERTEX_PROJECT_ID ||
+    process.env.GOOGLE_VERTEX_PROJECT ||
+    process.env.GOOGLE_CLOUD_PROJECT
+  );
+
+  const hasCredentials = !!(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY ||
+    (process.env.GOOGLE_AUTH_CLIENT_EMAIL &&
+      process.env.GOOGLE_AUTH_PRIVATE_KEY)
+  );
+
+  return hasProject && hasCredentials;
+}
+
+/**
+ * Check OpenAI provider environment variables
+ */
+function hasOpenAiProviderEnvVars(provider: string): boolean {
+  if (!["openai", "gpt"].includes(provider)) {
+    return false;
+  }
+  return !!process.env.OPENAI_API_KEY;
+}
+
+/**
+ * Check Anthropic provider environment variables
+ */
+function hasAnthropicProviderEnvVars(provider: string): boolean {
+  if (!["anthropic", "claude"].includes(provider)) {
+    return false;
+  }
+  return !!process.env.ANTHROPIC_API_KEY;
+}
+
+/**
+ * Check Azure provider environment variables
+ */
+function hasAzureProviderEnvVars(provider: string): boolean {
+  if (!["azure", "azureopenai"].includes(provider)) {
+    return false;
+  }
+  return !!process.env.AZURE_OPENAI_API_KEY;
+}
+
+/**
+ * Check Google AI provider environment variables
+ */
+function hasGoogleAiProviderEnvVars(provider: string): boolean {
+  if (!["google-ai", "google-studio"].includes(provider)) {
+    return false;
+  }
+  return !!(
+    process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY
+  );
+}
+
+/**
+ * Check HuggingFace provider environment variables
+ */
+function hasHuggingFaceProviderEnvVars(provider: string): boolean {
+  if (!["huggingface", "hugging-face", "hf"].includes(provider)) {
+    return false;
+  }
+  return !!(process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN);
+}
+
+/**
+ * Check Mistral provider environment variables
+ */
+function hasMistralProviderEnvVars(provider: string): boolean {
+  if (!["mistral", "mistral-ai", "mistralai"].includes(provider)) {
+    return false;
+  }
+  return !!process.env.MISTRAL_API_KEY;
+}
+
+/**
+ * Check Ollama provider environment variables
+ */
+function hasOllamaProviderEnvVars(provider: string): boolean {
+  if (!["ollama", "local", "local-ollama"].includes(provider)) {
+    return false;
+  }
+  return true; // Ollama doesn't require environment variables
+}
+
+/**
+ * Check LiteLLM provider environment variables
+ */
+function hasLiteLlmProviderEnvVars(provider: string): boolean {
+  if (provider !== "litellm") {
+    return false;
+  }
+  return true; // LiteLLM proxy availability will be checked during usage
 }
 
 /**

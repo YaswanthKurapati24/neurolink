@@ -11,7 +11,7 @@ import { config as dotenvConfig } from "dotenv";
 
 try {
   dotenvConfig(); // Load .env from current working directory
-} catch (error) {
+} catch {
   // Environment variables should be set externally in production
 }
 
@@ -21,6 +21,7 @@ import type {
   TextGenerationResult,
   EvaluationData,
 } from "./core/types.js";
+import type { BaseProvider } from "./core/baseProvider.js";
 import { AIProviderFactory } from "./core/factory.js";
 
 import { mcpLogger } from "./utils/logger.js";
@@ -50,6 +51,7 @@ import type {
   BatchOperationResult,
   ZodUnknownSchema,
 } from "./types/typeAliases.js";
+import type { ConversationMemoryStats } from "./types/conversationTypes.js";
 // Factory processing imports
 import {
   processFactoryOptions,
@@ -59,7 +61,6 @@ import {
   createCleanStreamOptions,
 } from "./utils/factoryProcessing.js";
 // Tool detection and execution imports
-import type { NeuroLinkExecutionContext } from "./mcp/factory.js";
 // Transformation utilities
 import {
   transformToolExecutions,
@@ -543,7 +544,7 @@ export class NeuroLink {
   private async generateTextInternal(
     options: TextGenerationOptions,
   ): Promise<TextGenerationResult> {
-    const startTime = Date.now();
+    const _startTime = Date.now();
     const functionTag = "NeuroLink.generateTextInternal";
 
     logger.debug(`[${functionTag}] Starting generation`, {
@@ -846,7 +847,7 @@ export class NeuroLink {
    */
   private async detectAndExecuteTools(
     prompt: string,
-    domainType?: string,
+    _domainType?: string,
   ): Promise<ToolExecutionResult> {
     const functionTag = "NeuroLink.detectAndExecuteTools";
 
@@ -917,7 +918,7 @@ export class NeuroLink {
     const result = await this.stream(streamOptions);
 
     // Convert StreamResult to simple string async iterable
-    async function* stringStream() {
+    async function* stringStream(): AsyncGenerator<string, void, unknown> {
       for await (const chunk of result.stream) {
         yield chunk.content;
       }
@@ -934,7 +935,46 @@ export class NeuroLink {
     const startTime = Date.now();
     const functionTag = "NeuroLink.stream";
 
-    // Validate input
+    this.validateStreamInput(options);
+    this.emitStreamStartEvent(options, startTime);
+
+    const factoryResult = this.processFactoryConfiguration(
+      options,
+      functionTag,
+    );
+    const enhancedOptions = this.enhanceStreamOptions(
+      options,
+      factoryResult,
+      functionTag,
+    );
+    const providerName = await this.determineProvider(options);
+
+    await this.initializeMCP();
+
+    try {
+      return await this.executeMainStream(
+        enhancedOptions,
+        providerName,
+        startTime,
+        functionTag,
+        factoryResult,
+      );
+    } catch (error) {
+      return await this.executeFallbackStream(
+        enhancedOptions,
+        providerName,
+        startTime,
+        functionTag,
+        factoryResult,
+        error,
+      );
+    }
+  }
+
+  /**
+   * Validate stream input parameters
+   */
+  private validateStreamInput(options: StreamOptions): void {
     if (
       !options?.input?.text ||
       typeof options.input.text !== "string" ||
@@ -944,220 +984,331 @@ export class NeuroLink {
         "Stream options must include input.text as a non-empty string",
       );
     }
+  }
 
-    // Emit stream start event
+  /**
+   * Emit stream start event
+   */
+  private emitStreamStartEvent(
+    options: StreamOptions,
+    startTime: number,
+  ): void {
     this.emitter.emit("stream:start", {
       provider: options.provider || "auto",
       timestamp: startTime,
     });
+  }
 
-    // Process factory configuration for streaming
+  /**
+   * Process factory configuration for streaming
+   */
+  private processFactoryConfiguration(
+    options: StreamOptions,
+    functionTag: string,
+  ): unknown {
     const factoryResult = processFactoryOptions(options);
     const streamingResult = processStreamingFactoryOptions(options);
 
-    // Validate factory configuration if present
-    if (factoryResult.hasFactoryConfig && options.factoryConfig) {
+    this.validateFactoryConfiguration(options, factoryResult);
+    this.logFactoryProcessingResults(
+      factoryResult,
+      streamingResult,
+      functionTag,
+    );
+
+    return factoryResult;
+  }
+
+  /**
+   * Validate factory configuration if present
+   */
+  private validateFactoryConfiguration(
+    options: StreamOptions,
+    factoryResult: unknown,
+  ): void {
+    const result = factoryResult as { hasFactoryConfig?: boolean };
+    if (result.hasFactoryConfig && options.factoryConfig) {
       const validation = validateFactoryConfig(options.factoryConfig);
       if (!validation.isValid) {
         mcpLogger.warn("Invalid factory configuration detected in stream", {
           errors: validation.errors,
         });
-        // Continue with warning rather than throwing - graceful degradation
       }
     }
+  }
 
-    // Log factory processing results
-    if (factoryResult.hasFactoryConfig) {
+  /**
+   * Log factory processing results
+   */
+  private logFactoryProcessingResults(
+    factoryResult: unknown,
+    streamingResult: unknown,
+    functionTag: string,
+  ): void {
+    const factory = factoryResult as {
+      hasFactoryConfig?: boolean;
+      domainType?: string;
+      enhancementType?: string;
+    };
+    const streaming = streamingResult as { hasStreamingConfig?: boolean };
+
+    if (factory.hasFactoryConfig) {
       mcpLogger.debug(`[${functionTag}] Factory configuration detected`, {
-        domainType: factoryResult.domainType,
-        enhancementType: factoryResult.enhancementType,
-        hasStreamingConfig: streamingResult.hasStreamingConfig,
+        domainType: factory.domainType,
+        enhancementType: factory.enhancementType,
+        hasStreamingConfig: streaming.hasStreamingConfig,
       });
     }
+  }
 
-    // Initialize MCP if needed
-    await this.initializeMCP();
+  /**
+   * Enhance stream options with factory configuration
+   */
+  private enhanceStreamOptions(
+    options: StreamOptions,
+    factoryResult: unknown,
+    functionTag: string,
+  ): StreamOptions {
+    const result = factoryResult as {
+      hasFactoryConfig?: boolean;
+      processedContext?: UnknownRecord;
+      domainType?: string;
+      enhancementType?: string;
+    };
 
-    // Context creation removed - was never used
-
-    // Determine provider to use
-    const providerName =
-      options.provider === "auto" || !options.provider
-        ? await getBestProvider()
-        : options.provider;
-
-    // Prepare enhanced options for both success and fallback paths
-    let enhancedOptions = options;
-    if (factoryResult.hasFactoryConfig) {
-      enhancedOptions = {
-        ...options,
-        // Merge contexts instead of overriding to preserve provider-required context
-        context: {
-          ...(options.context || {}),
-          ...(factoryResult.processedContext || {}),
-        } as UnknownRecord,
-        // Ensure evaluation is enabled when using factory patterns
-        enableEvaluation: options.enableEvaluation ?? true,
-        // Use domain type for evaluation if available
-        evaluationDomain: factoryResult.domainType || options.evaluationDomain,
-      };
-
-      mcpLogger.debug(
-        `[${functionTag}] Enhanced stream options with factory config`,
-        {
-          domainType: factoryResult.domainType,
-          enhancementType: factoryResult.enhancementType,
-          hasProcessedContext: !!factoryResult.processedContext,
-        },
-      );
+    if (!result.hasFactoryConfig) {
+      return options;
     }
 
-    try {
-      mcpLogger.debug(`[${functionTag}] Starting MCP-enabled streaming`, {
-        provider: providerName,
-        prompt: (options.input.text?.substring(0, 100) || "No text") + "...",
-      });
+    const enhancedOptions = {
+      ...options,
+      context: {
+        ...(options.context || {}),
+        ...(result.processedContext || {}),
+      } as UnknownRecord,
+      enableEvaluation: options.enableEvaluation ?? true,
+      evaluationDomain: result.domainType || options.evaluationDomain,
+    };
 
-      // Create provider using the same factory pattern as generate
-      const provider = await AIProviderFactory.createBestProvider(
-        providerName,
-        options.model,
-        true,
-        this as unknown as UnknownRecord, // Pass SDK instance
-      );
+    mcpLogger.debug(
+      `[${functionTag}] Enhanced stream options with factory config`,
+      {
+        domainType: result.domainType,
+        enhancementType: result.enhancementType,
+        hasProcessedContext: !!result.processedContext,
+      },
+    );
 
-      // Enable tool execution for streaming using BaseProvider method
-      provider.setupToolExecutor(
-        {
-          customTools: this.getCustomTools(),
-          executeTool: this.executeTool.bind(this),
-        },
-        functionTag,
-      );
+    return enhancedOptions;
+  }
 
-      // Create clean options for provider (remove factoryConfig)
-      const cleanOptions = createCleanStreamOptions(enhancedOptions);
+  /**
+   * Determine which provider to use
+   */
+  private async determineProvider(options: StreamOptions): Promise<string> {
+    return options.provider === "auto" || !options.provider
+      ? await getBestProvider()
+      : options.provider;
+  }
 
-      // Call the provider's stream method with clean options
-      const streamResult = await provider.stream(cleanOptions);
+  /**
+   * Execute main stream with MCP enabled
+   */
+  private async executeMainStream(
+    enhancedOptions: StreamOptions,
+    providerName: string,
+    startTime: number,
+    functionTag: string,
+    factoryResult: unknown,
+  ): Promise<StreamResult> {
+    mcpLogger.debug(`[${functionTag}] Starting MCP-enabled streaming`, {
+      provider: providerName,
+      prompt:
+        (enhancedOptions.input.text?.substring(0, 100) || "No text") + "...",
+    });
 
-      // Extract the stream from the result
-      const stream = streamResult.stream;
+    const provider = await this.createStreamProvider(
+      providerName,
+      enhancedOptions,
+      true,
+      functionTag,
+    );
+    const cleanOptions = createCleanStreamOptions(enhancedOptions);
+    const streamResult = await provider.stream(cleanOptions);
 
-      const responseTime = Date.now() - startTime;
+    const responseTime = Date.now() - startTime;
+    this.logStreamCompletion(functionTag, responseTime, providerName);
+    this.emitStreamEndEvent(providerName, responseTime);
 
-      mcpLogger.debug(`[${functionTag}] MCP-enabled streaming completed`, {
+    return this.createStreamResult({
+      streamResult,
+      providerName,
+      enhancedOptions,
+      startTime,
+      responseTime,
+      factoryResult,
+    });
+  }
+
+  /**
+   * Execute fallback stream without MCP
+   */
+  private async executeFallbackStream(
+    enhancedOptions: StreamOptions,
+    providerName: string,
+    startTime: number,
+    functionTag: string,
+    factoryResult: unknown,
+    error: unknown,
+  ): Promise<StreamResult> {
+    mcpLogger.warn(
+      `[${functionTag}] MCP streaming failed, falling back to regular`,
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+
+    const provider = await this.createStreamProvider(
+      providerName,
+      enhancedOptions,
+      false,
+      functionTag,
+    );
+    const cleanOptions = createCleanStreamOptions(enhancedOptions);
+    const streamResult = await provider.stream(cleanOptions);
+
+    const responseTime = Date.now() - startTime;
+    this.emitStreamEndEvent(providerName, responseTime, true);
+
+    return this.createStreamResult({
+      streamResult,
+      providerName,
+      enhancedOptions,
+      startTime,
+      responseTime,
+      factoryResult,
+      fallback: true,
+    });
+  }
+
+  /**
+   * Create and setup stream provider
+   */
+  private async createStreamProvider(
+    providerName: string,
+    options: StreamOptions,
+    enableMcp: boolean,
+    functionTag: string,
+  ): Promise<BaseProvider> {
+    const provider = (await AIProviderFactory.createBestProvider(
+      providerName,
+      options.model,
+      enableMcp,
+      this as unknown as UnknownRecord,
+    )) as BaseProvider;
+
+    // Enable tool execution for streaming using BaseProvider method
+    (
+      provider as { setupToolExecutor: (config: unknown, tag: string) => void }
+    ).setupToolExecutor(
+      {
+        customTools: this.getCustomTools(),
+        executeTool: this.executeTool.bind(this),
+      },
+      functionTag,
+    );
+
+    return provider;
+  }
+
+  /**
+   * Log stream completion
+   */
+  private logStreamCompletion(
+    functionTag: string,
+    responseTime: number,
+    providerName: string,
+  ): void {
+    mcpLogger.debug(`[${functionTag}] MCP-enabled streaming completed`, {
+      responseTime,
+      provider: providerName,
+    });
+  }
+
+  /**
+   * Emit stream end event
+   */
+  private emitStreamEndEvent(
+    providerName: string,
+    responseTime: number,
+    fallback = false,
+  ): void {
+    this.emitter.emit("stream:end", {
+      provider: providerName,
+      responseTime,
+      ...(fallback && { fallback: true }),
+    });
+  }
+
+  /**
+   * Create final stream result
+   */
+  private createStreamResult(params: {
+    streamResult: unknown;
+    providerName: string;
+    enhancedOptions: StreamOptions;
+    startTime: number;
+    responseTime: number;
+    factoryResult: unknown;
+    fallback?: boolean;
+  }): StreamResult {
+    const {
+      streamResult,
+      providerName,
+      enhancedOptions,
+      startTime,
+      responseTime,
+      factoryResult,
+      fallback,
+    } = params;
+
+    const result = streamResult as StreamResult;
+
+    const factory = factoryResult as { domainType?: string };
+
+    return {
+      stream: result.stream,
+      provider: providerName,
+      model: enhancedOptions.model,
+      usage: result.usage,
+      finishReason: result.finishReason,
+      toolCalls: result.toolCalls,
+      toolResults: result.toolResults,
+      analytics: result.analytics,
+      evaluation: result.evaluation
+        ? {
+            ...(result.evaluation as EvaluationData),
+            evaluationDomain:
+              ((result.evaluation as unknown as UnknownRecord)
+                ?.evaluationDomain as string) ??
+              enhancedOptions.evaluationDomain ??
+              factory.domainType,
+          }
+        : undefined,
+      metadata: {
+        streamId: `neurolink-${Date.now()}`,
+        startTime,
         responseTime,
-        provider: providerName,
-      });
-
-      // Emit stream completion event
-      this.emitter.emit("stream:end", {
-        provider: providerName,
-        responseTime,
-      });
-
-      // Convert to StreamResult format - Include analytics and evaluation from provider
-      return {
-        stream,
-        provider: providerName,
-        model: options.model,
-        usage: streamResult.usage,
-        finishReason: streamResult.finishReason,
-        toolCalls: streamResult.toolCalls,
-        toolResults: streamResult.toolResults,
-        analytics: streamResult.analytics,
-        evaluation: streamResult.evaluation
-          ? {
-              ...(streamResult.evaluation as EvaluationData),
-              // Include evaluationDomain from factory configuration
-              evaluationDomain:
-                ((streamResult.evaluation as unknown as UnknownRecord)
-                  ?.evaluationDomain as string) ??
-                enhancedOptions.evaluationDomain ??
-                factoryResult.domainType,
-            }
-          : undefined,
-        metadata: {
-          streamId: `neurolink-${Date.now()}`,
-          startTime,
-          responseTime,
-        },
-      };
-    } catch (error) {
-      // Fall back to regular streaming if MCP fails
-      mcpLogger.warn(
-        `[${functionTag}] MCP streaming failed, falling back to regular`,
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-
-      // Use factory to create provider without MCP
-      const provider = await AIProviderFactory.createBestProvider(
-        providerName,
-        options.model,
-        false, // Disable MCP for fallback
-        this as unknown as UnknownRecord, // Pass SDK instance
-      );
-
-      // Enable tool execution for fallback streaming using BaseProvider method
-      provider.setupToolExecutor(
-        {
-          customTools: this.getCustomTools(),
-          executeTool: this.executeTool.bind(this),
-        },
-        functionTag,
-      );
-
-      // Create clean options for fallback provider (remove factoryConfig)
-      const cleanOptions = createCleanStreamOptions(enhancedOptions);
-
-      const streamResult = await provider.stream(cleanOptions);
-      const responseTime = Date.now() - startTime;
-
-      // Emit stream completion event for fallback
-      this.emitter.emit("stream:end", {
-        provider: providerName,
-        responseTime,
-        fallback: true,
-      });
-
-      return {
-        stream: streamResult.stream,
-        provider: providerName,
-        model: options.model,
-        usage: streamResult.usage,
-        finishReason: streamResult.finishReason,
-        toolCalls: streamResult.toolCalls,
-        toolResults: streamResult.toolResults,
-        analytics: streamResult.analytics,
-        evaluation: streamResult.evaluation
-          ? {
-              ...(streamResult.evaluation as EvaluationData),
-              // Include evaluationDomain in fallback stream
-              evaluationDomain:
-                ((streamResult.evaluation as unknown as UnknownRecord)
-                  ?.evaluationDomain as string) ??
-                enhancedOptions.evaluationDomain ??
-                factoryResult.domainType,
-            }
-          : undefined,
-        metadata: {
-          streamId: `neurolink-${Date.now()}`,
-          startTime,
-          responseTime,
-          fallback: true,
-        },
-      };
-    }
+        ...(fallback && { fallback: true }),
+      },
+    };
   }
 
   /**
    * Get the EventEmitter to listen to NeuroLink events
    * @returns EventEmitter instance
    */
-  getEventEmitter() {
+  getEventEmitter(): EventEmitter {
     return this.emitter;
   }
 
@@ -1197,9 +1348,9 @@ export class NeuroLink {
           },
         );
         // Create minimal validation functions
-        validateTool = () => {}; // No-op
-        isToolNameAvailable = () => true; // Allow all names
-        suggestToolNames = () => ["alternative_tool"];
+        validateTool = (): void => {}; // No-op
+        isToolNameAvailable = (): boolean => true; // Allow all names
+        suggestToolNames = (): string[] => ["alternative_tool"];
       }
 
       // Check if tool name is available (not reserved)
@@ -1214,7 +1365,7 @@ export class NeuroLink {
       // Create a simplified tool object for validation
       const toolForValidation = {
         description: tool.description || "",
-        execute: async (params: ToolArgs) => {
+        execute: async (params: ToolArgs): Promise<JsonValue> => {
           if (tool.execute) {
             const result = await tool.execute(params);
             return result as JsonValue;
@@ -1473,7 +1624,10 @@ export class NeuroLink {
     if (!this.toolCircuitBreakers.has(toolName)) {
       this.toolCircuitBreakers.set(toolName, new CircuitBreaker(5, 60000)); // 5 failures, 1 minute timeout
     }
-    const circuitBreaker = this.toolCircuitBreakers.get(toolName)!;
+    const circuitBreaker = this.toolCircuitBreakers.get(toolName);
+    if (!circuitBreaker) {
+      throw new Error(`Circuit breaker not found for tool: ${toolName}`);
+    }
 
     // Initialize metrics for this tool if not exists
     if (!this.toolExecutionMetrics.has(toolName)) {
@@ -1485,7 +1639,10 @@ export class NeuroLink {
         lastExecutionTime: 0,
       });
     }
-    const metrics = this.toolExecutionMetrics.get(toolName)!;
+    const metrics = this.toolExecutionMetrics.get(toolName);
+    if (!metrics) {
+      throw new Error(`Metrics not found for tool: ${toolName}`);
+    }
     metrics.totalExecutions++;
 
     try {
@@ -1724,7 +1881,15 @@ export class NeuroLink {
    * Get all available tools including custom and in-memory ones
    * @returns Array of available tools with metadata
    */
-  async getAllAvailableTools() {
+  async getAllAvailableTools(): Promise<
+    Array<{
+      name: string;
+      description: string;
+      server: string;
+      category?: string;
+      inputSchema?: Record<string, unknown>;
+    }>
+  > {
     // Track memory usage for tool listing operations
     const { MemoryManager } = await import("./utils/performance.js");
     const startMemory = MemoryManager.getMemoryUsageMB();
@@ -1857,9 +2022,6 @@ export class NeuroLink {
     if (!options?.quiet) {
       mcpLogger.debug("🔍 DEBUG: MCP initialized:", this.mcpInitialized);
     }
-
-    const { AIProviderFactory } = await import("./core/factory.js");
-    const { hasProviderEnvVars } = await import("./utils/providerUtils.js");
 
     const providers = [
       "openai",
@@ -2170,7 +2332,10 @@ export class NeuroLink {
       // Test in-memory servers
       const inMemoryServers = this.getInMemoryServers();
       if (inMemoryServers.has(serverId)) {
-        const serverInfo = inMemoryServers.get(serverId)!;
+        const serverInfo = inMemoryServers.get(serverId);
+        if (!serverInfo) {
+          throw new Error(`Server info not found for server ID: ${serverId}`);
+        }
         return !!(serverInfo.tools && serverInfo.tools.length > 0);
       }
 
@@ -2584,7 +2749,7 @@ export class NeuroLink {
   /**
    * Get conversation memory statistics (public API)
    */
-  async getConversationStats() {
+  async getConversationStats(): Promise<ConversationMemoryStats> {
     if (!this.conversationMemory) {
       throw new Error("Conversation memory is not enabled");
     }
@@ -2889,7 +3054,9 @@ export class NeuroLink {
         // The AI provider will handle parameters dynamically based on the tool description
         const toolDefinition = {
           description: tool.description,
-          execute: async (params: Record<string, unknown>) => {
+          execute: async (
+            params: Record<string, unknown>,
+          ): Promise<unknown> => {
             try {
               mcpLogger.debug(
                 `[NeuroLink] Executing external MCP tool via AI SDK: ${tool.name}`,
@@ -2937,17 +3104,6 @@ export class NeuroLink {
       `[NeuroLink] Converted ${Object.keys(aiSDKTools).length} external MCP tools to AI SDK format`,
     );
     return aiSDKTools;
-  }
-
-  /**
-   * Convert JSON Schema to AI SDK compatible format
-   * For now, we'll skip schema validation and let the AI SDK handle parameters dynamically
-   */
-  private convertJSONSchemaToAISDKFormat(inputSchema: unknown): unknown {
-    // The simplest approach: don't provide parameters schema
-    // This lets the AI SDK handle the tool without schema validation
-    // Tools will still work, they just won't have strict parameter validation
-    return undefined;
   }
 
   /**

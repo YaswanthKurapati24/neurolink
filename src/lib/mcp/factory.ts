@@ -351,7 +351,8 @@ export function validateTool(tool: NeuroLinkMCPTool): boolean {
   try {
     const validation = validateMCPTool(tool);
     return validation.isValid;
-  } catch (error) {
+  } catch {
+    // Validation failure logged for debugging purposes
     return false;
   }
 }

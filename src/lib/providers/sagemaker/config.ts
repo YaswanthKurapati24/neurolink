@@ -117,7 +117,11 @@ export function getSageMakerModelConfig(
 
   // Check cache first
   if (modelConfigCache.has(endpoint)) {
-    return modelConfigCache.get(endpoint)!;
+    const cachedConfig = modelConfigCache.get(endpoint);
+    if (!cachedConfig) {
+      throw new Error(`Config not found in cache for endpoint: ${endpoint}`);
+    }
+    return cachedConfig;
   }
 
   const config: SageMakerModelConfig = {

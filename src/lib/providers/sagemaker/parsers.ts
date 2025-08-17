@@ -366,11 +366,11 @@ export class HuggingFaceStreamParser extends BaseStreamingParser {
       const errorMessage = extractApiErrorMessage(
         data.error as Record<string, unknown> | string,
       );
-      throw new SageMakerError(
-        `HuggingFace streaming error: ${errorMessage}`,
-        "MODEL_ERROR",
-        500,
-      );
+      throw new SageMakerError({
+        message: `HuggingFace streaming error: ${errorMessage}`,
+        code: "MODEL_ERROR",
+        statusCode: 500,
+      });
     }
 
     return null;
@@ -516,11 +516,11 @@ export class LlamaStreamParser extends BaseStreamingParser {
     if (data.error) {
       const errorData = data.error as Record<string, unknown> | string;
       const errorMessage = extractApiErrorMessage(errorData);
-      throw new SageMakerError(
-        `LLaMA streaming error: ${errorMessage}`,
-        "MODEL_ERROR",
-        500,
-      );
+      throw new SageMakerError({
+        message: `LLaMA streaming error: ${errorMessage}`,
+        code: "MODEL_ERROR",
+        statusCode: 500,
+      });
     }
 
     return null;

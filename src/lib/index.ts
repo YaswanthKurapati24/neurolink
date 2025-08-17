@@ -9,6 +9,8 @@
 
 // Core exports
 import { AIProviderFactory } from "./core/factory.js";
+import type { AIProvider } from "./core/types.js";
+import type { ProviderPairResult } from "./types/typeAliases.js";
 export { AIProviderFactory };
 export type {
   AIProvider,
@@ -18,6 +20,7 @@ export type {
   ProviderAttempt,
   SupportedModelName,
 } from "./core/types.js";
+export type { ProviderPairResult } from "./types/typeAliases.js";
 
 // NEW: Generate function exports
 export type {
@@ -69,7 +72,7 @@ export const VERSION = "1.0.0";
 export async function createAIProvider(
   providerName?: string,
   modelName?: string,
-) {
+): Promise<AIProvider> {
   return await AIProviderFactory.createProvider(
     providerName || "bedrock",
     modelName,
@@ -90,7 +93,7 @@ export async function createAIProviderWithFallback(
   primaryProvider?: string,
   fallbackProvider?: string,
   modelName?: string,
-) {
+): Promise<ProviderPairResult<AIProvider>> {
   return await AIProviderFactory.createProviderWithFallback(
     primaryProvider || "bedrock",
     fallbackProvider || "vertex",
@@ -111,7 +114,7 @@ export async function createAIProviderWithFallback(
 export async function createBestAIProvider(
   requestedProvider?: string,
   modelName?: string,
-) {
+): Promise<AIProvider> {
   return await AIProviderFactory.createBestProvider(
     requestedProvider,
     modelName,

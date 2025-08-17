@@ -276,7 +276,7 @@ export class MCPClientFactory {
     try {
       await Promise.race([
         new Promise<void>((resolve) => {
-          const checkReady = () => {
+          const checkReady = (): void => {
             if (processStartupController.signal.aborted) {
               resolve(); // Timeout reached, continue
             } else {
@@ -298,7 +298,7 @@ export class MCPClientFactory {
 
     // Create transport
     const transport = new StdioClientTransport({
-      command: config.command!,
+      command: config.command,
       args: config.args || [],
       env: Object.fromEntries(
         Object.entries({

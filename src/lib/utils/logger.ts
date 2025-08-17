@@ -182,7 +182,7 @@ function processLoggerArgs(
   }
 
   // Serialize the first argument robustly to handle complex objects
-  const message = (() => {
+  const message = ((): string => {
     try {
       return typeof args[0] === "string" ? args[0] : JSON.stringify(args[0]);
     } catch {
@@ -196,44 +196,44 @@ function processLoggerArgs(
 
 // Main unified logger export
 export const logger = {
-  debug: (...args: unknown[]) => {
+  debug: (...args: unknown[]): void => {
     if (neuroLinkLogger.shouldLog("debug")) {
       processLoggerArgs(args, (message, data) =>
         neuroLinkLogger.debug(message, data),
       );
     }
   },
-  info: (...args: unknown[]) => {
+  info: (...args: unknown[]): void => {
     if (neuroLinkLogger.shouldLog("info")) {
       processLoggerArgs(args, (message, data) =>
         neuroLinkLogger.info(message, data),
       );
     }
   },
-  warn: (...args: unknown[]) => {
+  warn: (...args: unknown[]): void => {
     if (neuroLinkLogger.shouldLog("warn")) {
       processLoggerArgs(args, (message, data) =>
         neuroLinkLogger.warn(message, data),
       );
     }
   },
-  error: (...args: unknown[]) => {
+  error: (...args: unknown[]): void => {
     if (neuroLinkLogger.shouldLog("error")) {
       processLoggerArgs(args, (message, data) =>
         neuroLinkLogger.error(message, data),
       );
     }
   },
-  always: (...args: unknown[]) => {
+  always: (...args: unknown[]): void => {
     neuroLinkLogger.always(...args);
   },
-  table: (data: unknown) => {
+  table: (data: unknown): void => {
     neuroLinkLogger.table(data);
   },
   // Expose structured logging methods
-  setLogLevel: (level: LogLevel) => neuroLinkLogger.setLogLevel(level),
-  getLogs: (level?: LogLevel) => neuroLinkLogger.getLogs(level),
-  clearLogs: () => neuroLinkLogger.clearLogs(),
+  setLogLevel: (level: LogLevel): void => neuroLinkLogger.setLogLevel(level),
+  getLogs: (level?: LogLevel): LogEntry[] => neuroLinkLogger.getLogs(level),
+  clearLogs: (): void => neuroLinkLogger.clearLogs(),
 };
 
 // MCP compatibility exports - all use the same unified logger

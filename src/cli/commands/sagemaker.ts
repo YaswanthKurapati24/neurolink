@@ -131,7 +131,7 @@ function clearSecureCredentials(sessionId: string): void {
 /**
  * Add SageMaker commands to the CLI
  */
-export function addSageMakerCommands(cli: Argv) {
+export function addSageMakerCommands(cli: Argv): Argv {
   cli.command(
     "sagemaker <command>",
     "Manage Amazon SageMaker AI models and endpoints",
@@ -273,12 +273,13 @@ export function addSageMakerCommands(cli: Argv) {
     },
     () => {}, // No-op handler as subcommands handle everything
   );
+  return cli;
 }
 
 /**
  * Handler for checking SageMaker status
  */
-async function statusHandler() {
+async function statusHandler(): Promise<void> {
   const spinner = ora("Checking SageMaker configuration...").start();
 
   try {
@@ -331,7 +332,7 @@ async function testEndpointHandler(argv: {
   endpoint: string;
   model?: string;
   prompt?: string;
-}) {
+}): Promise<void> {
   const { endpoint, model, prompt } = argv;
   const spinner = ora(
     `Testing connectivity to endpoint: ${endpoint}...`,
@@ -409,7 +410,7 @@ async function testEndpointHandler(argv: {
 /**
  * Handler for listing SageMaker endpoints
  */
-async function listEndpointsHandler() {
+async function listEndpointsHandler(): Promise<void> {
   const spinner = ora("Listing SageMaker endpoints...").start();
 
   try {
@@ -454,7 +455,7 @@ async function listEndpointsHandler() {
       } else {
         logger.always(chalk.yellow("No SageMaker endpoints found"));
       }
-    } catch (_awsError) {
+    } catch {
       spinner.fail("Failed to list endpoints");
       logger.error(
         chalk.red("AWS SDK credentials error or insufficient permissions"),
@@ -479,7 +480,9 @@ async function listEndpointsHandler() {
 /**
  * Handler for showing configuration
  */
-async function configHandler(args: { format: "json" | "table" | "yaml" }) {
+async function configHandler(args: {
+  format: "json" | "table" | "yaml";
+}): Promise<void> {
   const format = args.format;
   const spinner = ora("Loading SageMaker configuration...").start();
 
@@ -493,7 +496,7 @@ async function configHandler(args: { format: "json" | "table" | "yaml" }) {
       logger.always(JSON.stringify(summary, null, 2));
     } else if (format === "yaml") {
       // Simple YAML-like output
-      function printYaml(obj: UnknownRecord, indent = 0) {
+      function printYaml(obj: UnknownRecord, indent = 0): void {
         const spaces = " ".repeat(indent);
         for (const [key, value] of Object.entries(obj)) {
           if (typeof value === "object" && value !== null) {
@@ -557,7 +560,7 @@ async function configHandler(args: { format: "json" | "table" | "yaml" }) {
 /**
  * Handler for interactive setup
  */
-async function setupHandler() {
+async function setupHandler(): Promise<void> {
   logger.always(chalk.blue("\n🚀 SageMaker Interactive Setup\n"));
 
   // Pre-setup security advisory
@@ -599,14 +602,14 @@ async function setupHandler() {
         type: "input",
         name: "accessKeyId",
         message: "AWS Access Key ID:",
-        validate: (input: string) =>
+        validate: (input: string): boolean | string =>
           input.trim().length > 0 || "Access Key ID is required",
       },
       {
         type: "password",
         name: "secretAccessKey",
         message: "AWS Secret Access Key:",
-        validate: (input: string) =>
+        validate: (input: string): boolean | string =>
           input.trim().length > 0 || "Secret Access Key is required",
       },
       {
@@ -619,7 +622,7 @@ async function setupHandler() {
         type: "input",
         name: "endpointName",
         message: "Default SageMaker Endpoint Name:",
-        validate: (input: string) =>
+        validate: (input: string): boolean | string =>
           input.trim().length > 0 || "Endpoint name is required",
       },
       {
@@ -748,7 +751,7 @@ async function setupHandler() {
 /**
  * Handler for configuration validation
  */
-async function validateHandler() {
+async function validateHandler(): Promise<void> {
   const spinner = ora("Validating SageMaker configuration...").start();
 
   try {
@@ -795,7 +798,7 @@ async function benchmarkHandler(argv: {
   concurrency?: number;
   requests?: number;
   maxTokens?: number;
-}) {
+}): Promise<void> {
   const { endpoint, requests = 10, concurrency = 2, maxTokens = 100 } = argv;
   logger.always(chalk.blue(`\n⚡ SageMaker Performance Benchmark\n`));
   logger.always(`Endpoint: ${endpoint}`);
@@ -846,7 +849,12 @@ async function benchmarkHandler(argv: {
       for (let i = 0; i < batchSize; i++) {
         const requestStart = Date.now();
         batchPromises.push(
-          (async () => {
+          (async (): Promise<{
+            duration: number;
+            tokens: number;
+            success: boolean;
+            error?: string;
+          }> => {
             try {
               const result = await model.doGenerate({
                 inputFormat: "messages" as const,
@@ -952,7 +960,7 @@ async function benchmarkHandler(argv: {
 /**
  * Handler for clearing configuration cache
  */
-async function clearCacheHandler() {
+async function clearCacheHandler(): Promise<void> {
   const spinner = ora("Clearing SageMaker configuration cache...").start();
 
   try {
@@ -980,7 +988,7 @@ async function diagnoseHandler(argv: {
   connectivity?: boolean;
   streaming?: boolean;
   timeout?: number;
-}) {
+}): Promise<void> {
   const { endpoint, quick, full, timeout } = argv;
 
   logger.always(chalk.blue(`\n🔍 SageMaker Streaming Diagnostics\n`));

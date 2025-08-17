@@ -128,44 +128,7 @@ export class StructuredOutputParser {
 
       // Handle path navigation and stack management (parser-specific logic)
       if (!sharedState.inString) {
-        switch (char) {
-          case "{":
-            this.bracketTypeStack.push("{");
-            break;
-          case "}":
-            // Check for matching opening brace
-            if (
-              this.bracketTypeStack.length > 0 &&
-              this.bracketTypeStack[this.bracketTypeStack.length - 1] === "{"
-            ) {
-              this.bracketTypeStack.pop();
-              if (this.currentPath.length > 0) {
-                this.currentPath.pop();
-              }
-            }
-            break;
-          case "[":
-            this.bracketTypeStack.push("[");
-            break;
-          case "]":
-            // Check for matching opening bracket
-            if (
-              this.bracketTypeStack.length > 0 &&
-              this.bracketTypeStack[this.bracketTypeStack.length - 1] === "["
-            ) {
-              this.bracketTypeStack.pop();
-            }
-            break;
-          case ":":
-            // Entering a value
-            break;
-          case ",":
-            // Moving to next property
-            if (this.currentPath.length > 0) {
-              this.currentPath.pop();
-            }
-            break;
-        }
+        this.handleBracketCharacter(char);
       }
     }
 
@@ -175,6 +138,76 @@ export class StructuredOutputParser {
     this.inString = sharedState.inString;
     this.escapeNext = sharedState.escapeNext;
     this.lastProcessedLength = this.buffer.length;
+  }
+
+  /**
+   * Handle bracket characters for path navigation to reduce nesting depth
+   */
+  private handleBracketCharacter(char: string): void {
+    switch (char) {
+      case "{":
+        this.bracketTypeStack.push("{");
+        break;
+      case "}":
+        this.handleClosingBrace();
+        break;
+      case "[":
+        this.bracketTypeStack.push("[");
+        break;
+      case "]":
+        this.handleClosingBracket();
+        break;
+      case ":":
+        // Entering a value
+        break;
+      case ",":
+        this.handleComma();
+        break;
+    }
+  }
+
+  /**
+   * Handle closing brace character
+   */
+  private handleClosingBrace(): void {
+    if (!this.canPopBracketType("{")) {
+      return;
+    }
+
+    this.bracketTypeStack.pop();
+    if (this.currentPath.length > 0) {
+      this.currentPath.pop();
+    }
+  }
+
+  /**
+   * Handle closing bracket character
+   */
+  private handleClosingBracket(): void {
+    if (!this.canPopBracketType("[")) {
+      return;
+    }
+
+    this.bracketTypeStack.pop();
+  }
+
+  /**
+   * Handle comma character
+   */
+  private handleComma(): void {
+    if (this.currentPath.length > 0) {
+      this.currentPath.pop();
+    }
+  }
+
+  /**
+   * Check if we can pop the specified bracket type from the stack
+   */
+  private canPopBracketType(expectedType: string): boolean {
+    return (
+      this.bracketTypeStack.length > 0 &&
+      this.bracketTypeStack[this.bracketTypeStack.length - 1] === expectedType
+    );
   }
 
   /**
@@ -237,72 +270,224 @@ export class StructuredOutputParser {
 
     while (i < length) {
       // Skip whitespace - optimized character check instead of regex for performance
-      while (i < length && this.isWhitespace(buffer[i])) {
-        i++;
-      }
+      i = this.skipWhitespace(buffer, i, length);
 
       if (i >= length) {
         break;
       }
 
-      switch (parsingState) {
-        case "seeking_key":
-          // Look for opening quote of key
-          if (buffer[i] === '"') {
-            const keyResult = this.parseQuotedString(buffer, i);
-            if (!keyResult) {
-              // Incomplete key, save position and exit
-              this.lastKeyValueParsePosition = i;
-              return;
-            }
-            currentKey = keyResult.value;
-            i = keyResult.endIndex + 1;
-            parsingState = "seeking_colon";
-          } else if (buffer[i] === "{" || buffer[i] === "[") {
-            // Skip nested objects/arrays for now - they need separate handling
-            i++;
-          } else {
-            i++;
-          }
-          break;
+      const parseResult = this.handleParsingState(
+        buffer,
+        i,
+        parsingState,
+        currentKey,
+        targetObject,
+      );
 
-        case "seeking_colon":
-          if (buffer[i] === ":") {
-            i++;
-            parsingState = "seeking_value";
-          } else if (!this.isWhitespace(buffer[i])) {
-            // Invalid character, reset state
-            parsingState = "seeking_key";
-            currentKey = null;
-            i++;
-          } else {
-            i++;
-          }
-          break;
-
-        case "seeking_value": {
-          // Parse value
-          const valueResult = this.parseJsonValue(buffer, i);
-          if (valueResult && currentKey) {
-            targetObject[currentKey] = valueResult.value;
-            i = valueResult.endIndex + 1;
-            parsingState = "seeking_key";
-            currentKey = null;
-          } else {
-            // Incomplete value, save position for next chunk
-            this.lastKeyValueParsePosition = i;
-            return;
-          }
-          break;
-        }
-
-        default:
-          i++;
+      if (parseResult.shouldReturn) {
+        this.lastKeyValueParsePosition = parseResult.position;
+        return;
       }
+
+      i = parseResult.position;
+      parsingState = parseResult.newState;
+      currentKey = parseResult.newKey;
     }
 
     // Update the position we've processed to avoid reprocessing in future calls
     this.lastKeyValueParsePosition = i;
+  }
+
+  /**
+   * Helper method to skip whitespace characters efficiently
+   */
+  private skipWhitespace(
+    buffer: string,
+    startIndex: number,
+    length: number,
+  ): number {
+    let i = startIndex;
+    while (i < length && this.isWhitespace(buffer[i])) {
+      i++;
+    }
+    return i;
+  }
+
+  /**
+   * Handle different parsing states to reduce nesting depth
+   */
+  private handleParsingState(
+    buffer: string,
+    position: number,
+    state: "seeking_key" | "seeking_colon" | "seeking_value" | "parsing_value",
+    currentKey: string | null,
+    targetObject: Record<string, unknown>,
+  ): {
+    position: number;
+    newState:
+      | "seeking_key"
+      | "seeking_colon"
+      | "seeking_value"
+      | "parsing_value";
+    newKey: string | null;
+    shouldReturn: boolean;
+  } {
+    switch (state) {
+      case "seeking_key":
+        return this.handleSeekingKey(buffer, position, currentKey);
+      case "seeking_colon":
+        return this.handleSeekingColon(buffer, position, currentKey);
+      case "seeking_value":
+        return this.handleSeekingValue(
+          buffer,
+          position,
+          currentKey,
+          targetObject,
+        );
+      default:
+        return {
+          position: position + 1,
+          newState: state,
+          newKey: currentKey,
+          shouldReturn: false,
+        };
+    }
+  }
+
+  /**
+   * Handle seeking key state
+   */
+  private handleSeekingKey(
+    buffer: string,
+    position: number,
+    currentKey: string | null,
+  ): {
+    position: number;
+    newState:
+      | "seeking_key"
+      | "seeking_colon"
+      | "seeking_value"
+      | "parsing_value";
+    newKey: string | null;
+    shouldReturn: boolean;
+  } {
+    if (buffer[position] === '"') {
+      const keyResult = this.parseQuotedString(buffer, position);
+      if (!keyResult) {
+        return {
+          position,
+          newState: "seeking_key",
+          newKey: currentKey,
+          shouldReturn: true,
+        };
+      }
+      return {
+        position: keyResult.endIndex + 1,
+        newState: "seeking_colon",
+        newKey: keyResult.value,
+        shouldReturn: false,
+      };
+    }
+
+    // Skip nested objects/arrays for now - they need separate handling
+    if (buffer[position] === "{" || buffer[position] === "[") {
+      return {
+        position: position + 1,
+        newState: "seeking_key",
+        newKey: currentKey,
+        shouldReturn: false,
+      };
+    }
+
+    return {
+      position: position + 1,
+      newState: "seeking_key",
+      newKey: currentKey,
+      shouldReturn: false,
+    };
+  }
+
+  /**
+   * Handle seeking colon state
+   */
+  private handleSeekingColon(
+    buffer: string,
+    position: number,
+    currentKey: string | null,
+  ): {
+    position: number;
+    newState:
+      | "seeking_key"
+      | "seeking_colon"
+      | "seeking_value"
+      | "parsing_value";
+    newKey: string | null;
+    shouldReturn: boolean;
+  } {
+    if (buffer[position] === ":") {
+      return {
+        position: position + 1,
+        newState: "seeking_value",
+        newKey: currentKey,
+        shouldReturn: false,
+      };
+    }
+
+    if (!this.isWhitespace(buffer[position])) {
+      // Invalid character, reset state
+      return {
+        position: position + 1,
+        newState: "seeking_key",
+        newKey: null,
+        shouldReturn: false,
+      };
+    }
+
+    return {
+      position: position + 1,
+      newState: "seeking_colon",
+      newKey: currentKey,
+      shouldReturn: false,
+    };
+  }
+
+  /**
+   * Handle seeking value state
+   */
+  private handleSeekingValue(
+    buffer: string,
+    position: number,
+    currentKey: string | null,
+    targetObject: Record<string, unknown>,
+  ): {
+    position: number;
+    newState:
+      | "seeking_key"
+      | "seeking_colon"
+      | "seeking_value"
+      | "parsing_value";
+    newKey: string | null;
+    shouldReturn: boolean;
+  } {
+    const valueResult = this.parseJsonValue(buffer, position);
+
+    if (valueResult && currentKey) {
+      targetObject[currentKey] = valueResult.value;
+      return {
+        position: valueResult.endIndex + 1,
+        newState: "seeking_key",
+        newKey: null,
+        shouldReturn: false,
+      };
+    }
+
+    // Incomplete value, save position for next chunk
+    return {
+      position,
+      newState: "seeking_value",
+      newKey: currentKey,
+      shouldReturn: true,
+    };
   }
 
   /**
@@ -324,56 +509,76 @@ export class StructuredOutputParser {
 
       if (char === '"') {
         return { value: result, endIndex: i };
-      } else if (char === "\\" && i + 1 < buffer.length) {
-        // Handle escaped characters
-        const nextChar = buffer[i + 1];
-        switch (nextChar) {
-          case '"':
-          case "\\":
-          case "/":
-            result += nextChar;
-            break;
-          case "b":
-            result += "\b";
-            break;
-          case "f":
-            result += "\f";
-            break;
-          case "n":
-            result += "\n";
-            break;
-          case "r":
-            result += "\r";
-            break;
-          case "t":
-            result += "\t";
-            break;
-          case "u":
-            // Unicode escape - simplified handling with optimized validation
-            if (i + 5 < buffer.length) {
-              const unicodeStr = buffer.substring(i + 2, i + 6);
-              if (this.isValidHexString(unicodeStr)) {
-                result += String.fromCharCode(parseInt(unicodeStr, 16));
-                i += 4; // Skip additional unicode chars
-              } else {
-                result += nextChar; // Fallback
-              }
-            } else {
-              result += nextChar; // Fallback
-            }
-            break;
-          default:
-            result += nextChar;
-        }
-        i += 2;
-      } else {
-        result += char;
-        i++;
       }
+
+      if (char === "\\" && i + 1 < buffer.length) {
+        const escapeResult = this.handleEscapeCharacter(buffer, i);
+        result += escapeResult.character;
+        i = escapeResult.nextIndex;
+        continue;
+      }
+
+      result += char;
+      i++;
     }
 
     // Unterminated string - return partial for streaming
     return { value: result, endIndex: i - 1 };
+  }
+
+  /**
+   * Handle escaped characters in JSON strings to reduce nesting depth
+   */
+  private handleEscapeCharacter(
+    buffer: string,
+    backslashIndex: number,
+  ): { character: string; nextIndex: number } {
+    const nextChar = buffer[backslashIndex + 1];
+
+    switch (nextChar) {
+      case '"':
+      case "\\":
+      case "/":
+        return { character: nextChar, nextIndex: backslashIndex + 2 };
+      case "b":
+        return { character: "\b", nextIndex: backslashIndex + 2 };
+      case "f":
+        return { character: "\f", nextIndex: backslashIndex + 2 };
+      case "n":
+        return { character: "\n", nextIndex: backslashIndex + 2 };
+      case "r":
+        return { character: "\r", nextIndex: backslashIndex + 2 };
+      case "t":
+        return { character: "\t", nextIndex: backslashIndex + 2 };
+      case "u":
+        return this.handleUnicodeEscape(buffer, backslashIndex);
+      default:
+        return { character: nextChar, nextIndex: backslashIndex + 2 };
+    }
+  }
+
+  /**
+   * Handle Unicode escape sequences
+   */
+  private handleUnicodeEscape(
+    buffer: string,
+    backslashIndex: number,
+  ): { character: string; nextIndex: number } {
+    const nextChar = buffer[backslashIndex + 1];
+
+    // Check if we have enough characters for a complete unicode sequence
+    if (backslashIndex + 5 >= buffer.length) {
+      return { character: nextChar, nextIndex: backslashIndex + 2 };
+    }
+
+    const unicodeStr = buffer.substring(backslashIndex + 2, backslashIndex + 6);
+
+    if (!this.isValidHexString(unicodeStr)) {
+      return { character: nextChar, nextIndex: backslashIndex + 2 };
+    }
+
+    const unicodeChar = String.fromCharCode(parseInt(unicodeStr, 16));
+    return { character: unicodeChar, nextIndex: backslashIndex + 6 };
   }
 
   /**

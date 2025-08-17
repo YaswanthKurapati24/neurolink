@@ -278,7 +278,16 @@ export async function withRetry<T>(
     onRetry?: (attempt: number, error: Error) => void;
   },
 ): Promise<T> {
-  const { maxAttempts, delayMs, isRetriable = () => true, onRetry } = options;
+  const {
+    maxAttempts,
+    delayMs,
+    isRetriable = (): boolean => true,
+    onRetry,
+  } = options;
+
+  if (maxAttempts < 1) {
+    throw new Error("maxAttempts must be at least 1");
+  }
 
   let lastError: Error;
 
@@ -302,7 +311,8 @@ export async function withRetry<T>(
     }
   }
 
-  throw lastError!;
+  // This should never be reached due to the loop logic, but just in case
+  throw new Error("All retry attempts failed but no error was captured");
 }
 
 /**

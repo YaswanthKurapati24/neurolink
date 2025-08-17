@@ -11,6 +11,15 @@ dotenv.config();
 
 const execAsync = promisify(exec);
 
+// Helper function for safe JSON parsing from CLI output
+function parseJsonFromOutput(stdout: string): unknown {
+  const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("No JSON found in output despite expectation");
+  }
+  return JSON.parse(jsonMatch[0]);
+}
+
 // Provider-specific environment variables - supporting multiple auth methods
 const PROVIDER_ENV_KEYS: Record<string, string | string[]> = {
   "google-ai": "GOOGLE_AI_API_KEY",
@@ -202,10 +211,8 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // For JSON format, extract the JSON part from stdout (skip pnpm command output)
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonString = jsonMatch![0];
-
-        expect(() => JSON.parse(jsonString)).not.toThrow();
-        const jsonResult = JSON.parse(jsonString);
+        const jsonResult = parseJsonFromOutput(stdout);
+        expect(() => JSON.parse(JSON.stringify(jsonResult))).not.toThrow();
         expect(jsonResult).toHaveProperty("content");
         expect(jsonResult.content).not.toBe("");
         expect(typeof jsonResult.content).toBe("string");
@@ -252,10 +259,8 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // For JSON format, extract the JSON part from stdout (skip pnpm command output)
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonString = jsonMatch![0];
-
-        expect(() => JSON.parse(jsonString)).not.toThrow();
-        const jsonResult = JSON.parse(jsonString);
+        const jsonResult = parseJsonFromOutput(stdout);
+        expect(() => JSON.parse(JSON.stringify(jsonResult))).not.toThrow();
         expect(jsonResult).toHaveProperty("content");
         expect(jsonResult.content).not.toBe("");
         expect(typeof jsonResult.content).toBe("string");
@@ -427,7 +432,7 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // Parse JSON response
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonResult = JSON.parse(jsonMatch![0]);
+        const jsonResult = parseJsonFromOutput(stdout);
 
         // Verify basic generation worked
         expect(jsonResult).toHaveProperty("content");
@@ -477,7 +482,7 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // Parse JSON response
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonResult = JSON.parse(jsonMatch![0]);
+        const jsonResult = parseJsonFromOutput(stdout);
 
         // Verify basic generation worked
         expect(jsonResult).toHaveProperty("content");
@@ -533,7 +538,7 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // Parse JSON response
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonResult = JSON.parse(jsonMatch![0]);
+        const jsonResult = parseJsonFromOutput(stdout);
 
         // Verify basic generation worked
         expect(jsonResult).toHaveProperty("content");
@@ -585,7 +590,7 @@ describe(`Basic Functionality Tests (${getTestProvider().toUpperCase()})`, () =>
         // Parse JSON response
         const jsonMatch = stdout.match(/\{[\s\S]*\}/);
         expect(jsonMatch).not.toBeNull();
-        const jsonResult = JSON.parse(jsonMatch![0]);
+        const jsonResult = parseJsonFromOutput(stdout);
 
         // Verify basic generation worked
         expect(jsonResult).toHaveProperty("content");

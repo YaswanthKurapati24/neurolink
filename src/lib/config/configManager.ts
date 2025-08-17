@@ -14,7 +14,6 @@ import type {
   BackupMetadata,
   ConfigValidationResult,
   ConfigUpdateOptions,
-  DEFAULT_CONFIG,
 } from "./types.js";
 
 const { readFile, writeFile, readdir, mkdir, unlink, access } = fs;
@@ -356,7 +355,7 @@ export default ${JSON.stringify(currentConfig, null, 2)};`;
       }
 
       throw new Error("Invalid config file format");
-    } catch (error) {
+    } catch {
       logger.info("Config file not found, generating default...");
       return await this.generateDefaultConfig();
     }

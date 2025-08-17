@@ -1,18 +1,11 @@
-import { openai } from "@ai-sdk/openai";
-import { streamText, Output, type Schema, type LanguageModelV1 } from "ai";
-import type {
-  ZodUnknownSchema,
-  ValidationSchema,
-} from "../types/typeAliases.js";
+import { streamText, type LanguageModelV1 } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import type { ValidationSchema } from "../types/typeAliases.js";
 import { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { TimeoutError, createTimeoutController } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS, DEFAULT_MAX_STEPS } from "../core/constants.js";
 import type { UnknownRecord } from "../types/common.js";
 import type { NeuroLink } from "../neurolink.js";
@@ -47,6 +40,7 @@ export class OpenAIProvider extends BaseProvider {
     process.env.OPENAI_API_KEY = getOpenAIApiKey();
 
     // Initialize model
+    const openai = createOpenAI();
     this.model = openai(this.modelName);
 
     logger.debug("OpenAIProviderV2 initialized", {
@@ -109,7 +103,7 @@ export class OpenAIProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ValidationSchema,
+    _analysisSchema?: ValidationSchema,
   ): Promise<StreamResult> {
     this.validateStreamOptions(options);
 

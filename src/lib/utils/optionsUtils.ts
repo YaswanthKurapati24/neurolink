@@ -106,37 +106,40 @@ export class OptionsEnhancer {
    * Without these, SharedArrayBuffer will be unavailable and thread-safety will be disabled.
    * In Node.js, SharedArrayBuffer is available in worker threads.
    */
-  private static enhancementCountBuffer: SharedArrayBuffer | null = (() => {
-    // In browsers, SharedArrayBuffer is only usable if cross-origin isolation is enabled
-    const isBrowser =
-      typeof window !== "undefined" && typeof window.document !== "undefined";
-    const crossOriginIsolated = isBrowser ? !!window.crossOriginIsolated : true;
+  private static enhancementCountBuffer: SharedArrayBuffer | null =
+    ((): SharedArrayBuffer | null => {
+      // In browsers, SharedArrayBuffer is only usable if cross-origin isolation is enabled
+      const isBrowser =
+        typeof window !== "undefined" && typeof window.document !== "undefined";
+      const crossOriginIsolated = isBrowser
+        ? !!window.crossOriginIsolated
+        : true;
 
-    if (typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated) {
-      try {
-        return new SharedArrayBuffer(4); // 4 bytes for Int32
-      } catch (e) {
-        // SharedArrayBuffer is defined but not usable (browser CORS headers not set)
-        if (typeof logger !== "undefined" && logger?.warn) {
-          logger.warn(
-            "[OptionsEnhancer] SharedArrayBuffer is defined but not usable. " +
-              "Ensure cross-origin isolation headers are set in browser environments. " +
+      if (typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated) {
+        try {
+          return new SharedArrayBuffer(4); // 4 bytes for Int32
+        } catch {
+          // SharedArrayBuffer is defined but not usable (browser CORS headers not set)
+          if (typeof logger !== "undefined" && logger?.warn) {
+            logger.warn(
+              "[OptionsEnhancer] SharedArrayBuffer is defined but not usable. " +
+                "Ensure cross-origin isolation headers are set in browser environments. " +
+                "Falling back to non-thread-safe enhancement counter.",
+            );
+          }
+          return null;
+        }
+      } else if (isBrowser && !crossOriginIsolated) {
+        if (typeof logger !== "undefined" && logger?.debug) {
+          logger.debug(
+            "[OptionsEnhancer] SharedArrayBuffer requires cross-origin isolation in browsers. " +
+              "Set Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers. " +
               "Falling back to non-thread-safe enhancement counter.",
           );
         }
-        return null;
       }
-    } else if (isBrowser && !crossOriginIsolated) {
-      if (typeof logger !== "undefined" && logger?.debug) {
-        logger.debug(
-          "[OptionsEnhancer] SharedArrayBuffer requires cross-origin isolation in browsers. " +
-            "Set Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp headers. " +
-            "Falling back to non-thread-safe enhancement counter.",
-        );
-      }
-    }
-    return null;
-  })();
+      return null;
+    })();
   private static enhancementCountArray: Int32Array | null =
     OptionsEnhancer.enhancementCountBuffer
       ? new Int32Array(OptionsEnhancer.enhancementCountBuffer)
@@ -475,12 +478,23 @@ export class OptionsEnhancer {
     options: GenerateOptions,
     enhancementOptions: EnhancementOptions,
   ): EnhancementResult {
-    const legacyMigration = enhancementOptions.legacyMigration!;
+    const legacyMigration = enhancementOptions.legacyMigration;
+    if (!legacyMigration) {
+      throw new Error(
+        "Legacy migration configuration is required but not provided",
+      );
+    }
+    if (!legacyMigration.legacyContext) {
+      throw new Error("Legacy context is required for legacy migration");
+    }
+    if (!legacyMigration.domainType) {
+      throw new Error("Domain type is required for legacy migration");
+    }
 
     // Convert legacy context to execution context
     const executionContext = ContextConverter.convertBusinessContext(
-      legacyMigration.legacyContext!,
-      legacyMigration.domainType!,
+      legacyMigration.legacyContext,
+      legacyMigration.domainType,
       {
         preserveLegacyFields: legacyMigration.preserveFields,
         validateDomainData: true,
@@ -525,7 +539,7 @@ export class OptionsEnhancer {
         configurationUsed: {
           domainType: legacyMigration.domainType,
           preserveFields: legacyMigration.preserveFields,
-          legacyContextKeys: Object.keys(legacyMigration.legacyContext!),
+          legacyContextKeys: Object.keys(legacyMigration.legacyContext),
         },
         warnings: [],
         recommendations: [

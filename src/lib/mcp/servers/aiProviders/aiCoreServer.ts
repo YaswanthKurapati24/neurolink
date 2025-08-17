@@ -8,7 +8,6 @@ import { z } from "zod";
 import type { Unknown } from "../../../types/common.js";
 import { createMCPServer } from "../../factory.js";
 import type { NeuroLinkExecutionContext, ToolResult } from "../../factory.js";
-import { ServiceRegistry } from "../../../core/serviceRegistry.js";
 import {
   getBestProvider,
   getAvailableProviders,
@@ -81,7 +80,16 @@ aiCoreServer.registerTool({
       const selectedProvider = await getBestProvider(typedParams.preferred);
 
       // Get provider capabilities
-      const getProviderCapabilities = (provider: string) => ({
+      const getProviderCapabilities = (
+        provider: string,
+      ): {
+        multimodal: boolean;
+        streaming: boolean;
+        maxTokens: number;
+        costEfficient: boolean;
+        localExecution: boolean;
+        openSource: boolean;
+      } => ({
         multimodal:
           provider === "openai" ||
           provider === "vertex" ||

@@ -16,11 +16,7 @@ import type { UnknownRecord } from "../types/common.js";
 import type { NeuroLink } from "../neurolink.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { createTimeoutController, TimeoutError } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS, DEFAULT_MAX_STEPS } from "../core/constants.js";
 import { ModelConfigurationManager } from "../core/modelConfiguration.js";
 import {
@@ -35,7 +31,7 @@ let _createVertexAnthropic: unknown = null;
 let _anthropicImportAttempted = false;
 
 // Function to dynamically import anthropic support
-async function getCreateVertexAnthropic() {
+async function getCreateVertexAnthropic(): Promise<unknown> {
   if (_anthropicImportAttempted) {
     return _createVertexAnthropic;
   }
@@ -51,7 +47,7 @@ async function getCreateVertexAnthropic() {
     _createVertexAnthropic = anthropicModule.createVertexAnthropic;
     logger.debug("[GoogleVertexAI] Anthropic module successfully loaded");
     return _createVertexAnthropic;
-  } catch (error) {
+  } catch {
     // Anthropic module not available
     logger.warn(
       "[GoogleVertexAI] Anthropic module not available. Install @ai-sdk/google-vertex ^2.2.0 for Anthropic model support.",
@@ -257,7 +253,7 @@ export class GoogleVertexProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
+    _analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
   ): Promise<StreamResult> {
     const functionTag = "GoogleVertexProvider.executeStream";
     let chunkCount = 0;
@@ -279,7 +275,7 @@ export class GoogleVertexProvider extends BaseProvider {
       logger.debug(`${functionTag}: Starting stream request`, {
         modelName: this.modelName,
         promptLength: options.input.text.length,
-        hasSchema: !!analysisSchema,
+        hasSchema: !!_analysisSchema,
       });
 
       const model = await this.getModel();
@@ -347,12 +343,12 @@ export class GoogleVertexProvider extends BaseProvider {
         },
       };
 
-      if (analysisSchema) {
+      if (_analysisSchema) {
         try {
           streamOptions = {
             ...streamOptions,
             experimental_output: Output.object({
-              schema: analysisSchema,
+              schema: _analysisSchema,
             }),
           };
         } catch (error) {
@@ -643,7 +639,7 @@ export class GoogleVertexProvider extends BaseProvider {
       const tool = {
         description,
         parameters: schema,
-        execute: async (params: Record<string, unknown>) => {
+        execute: async (params: Record<string, unknown>): Promise<unknown> => {
           try {
             const contextEnrichedParams = {
               ...params,

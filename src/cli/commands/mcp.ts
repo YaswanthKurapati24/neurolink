@@ -22,87 +22,6 @@ import path from "path";
 // Using MCPCommandArgs from types/cli.ts
 
 /**
- * Response interface for MCP status information returned from the NeuroLink SDK.
- * This interface represents the raw status data that gets converted to CLI-friendly format.
- *
- * @interface MCPStatusResponse
- * @since 7.6.1
- *
- * @example
- * ```typescript
- * const status: MCPStatusResponse = {
- *   autoDiscoveredServers: [
- *     {
- *       name: "filesystem",
- *       id: "fs-server-001",
- *       status: "connected",
- *       source: "claude-desktop"
- *     }
- *   ],
- *   mcpInitialized: true,
- *   totalServers: 3,
- *   availableServers: 2
- * };
- * ```
- */
-interface MCPStatusResponse {
-  /**
-   * Array of servers that were automatically discovered from various sources.
-   * These servers are found by scanning configuration files from Claude Desktop,
-   * VS Code, and other MCP-compatible applications.
-   *
-   * @optional
-   * @since 7.6.1
-   */
-  autoDiscoveredServers?: Array<{
-    /**
-     * Display name of the discovered MCP server.
-     * Falls back to `id` if name is not available.
-     *
-     * @optional
-     * @example "filesystem" | "github-integration" | "database-connector"
-     */
-    name?: string;
-
-    /**
-     * Unique identifier for the MCP server instance.
-     * Used for internal tracking and deduplication.
-     *
-     * @optional
-     * @example "fs-server-001" | "gh-server-abc123"
-     */
-    id?: string;
-
-    /**
-     * Current connection status of the discovered server.
-     * Indicates whether the server is operational and reachable.
-     *
-     * @optional
-     * @example "connected" | "disconnected" | "error" | "unknown"
-     */
-    status?: string;
-
-    /**
-     * Source from which this server was discovered.
-     * Helps users understand where the server configuration originated.
-     *
-     * @optional
-     * @example "claude-desktop" | "vscode" | "manual-config" | "auto-scan"
-     */
-    source?: string;
-  }>;
-
-  /**
-   * Additional properties that may be included in the status response.
-   * Allows for extensibility and compatibility with future SDK versions.
-   * Common properties include `mcpInitialized`, `totalServers`, `availableServers`, etc.
-   *
-   * @since 7.6.1
-   */
-  [key: string]: unknown;
-}
-
-/**
  * Popular MCP servers registry
  */
 const POPULAR_MCP_SERVERS: Record<
@@ -189,7 +108,7 @@ export class MCPCommandFactory {
     return {
       command: "mcp <subcommand>",
       describe: "Manage Model Context Protocol (MCP) servers",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return yargs
           .command(
             "list",
@@ -250,7 +169,7 @@ export class MCPCommandFactory {
           .demandCommand(1, "Please specify an MCP subcommand")
           .help();
       },
-      handler: () => {
+      handler: (): void => {
         // No-op handler as subcommands handle everything
       },
     };
@@ -263,7 +182,7 @@ export class MCPCommandFactory {
     return {
       command: "discover",
       describe: "Auto-discover MCP servers from various sources",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return yargs
           .option("auto-install", {
             type: "boolean",
@@ -556,7 +475,12 @@ export class MCPCommandFactory {
    */
   private static async executeInstall(argv: MCPCommandArgs): Promise<void> {
     try {
-      const serverName = argv.server!;
+      if (!argv.server) {
+        logger.error(chalk.red("❌ Server name is required"));
+        process.exit(1);
+      }
+
+      const serverName = argv.server;
       const serverConfig = POPULAR_MCP_SERVERS[serverName];
 
       if (!serverConfig) {
@@ -575,12 +499,12 @@ export class MCPCommandFactory {
         : ora(`Installing ${serverName} MCP server...`).start();
 
       // Parse environment variables if provided
-      let env = serverConfig.env;
+      let _env = serverConfig.env;
       if (argv.env) {
         try {
           const parsedEnv = JSON.parse(argv.env);
-          env = { ...env, ...parsedEnv } as Record<string, string>;
-        } catch (_error) {
+          _env = { ..._env, ...parsedEnv } as Record<string, string>;
+        } catch {
           if (spinner) {
             spinner.fail();
           }
@@ -641,7 +565,7 @@ export class MCPCommandFactory {
             logger.always(chalk.red(`Error: ${installedServer.error}`));
           }
         }
-      } catch (testError) {
+      } catch {
         logger.always(chalk.yellow("⚠️  Could not test connection"));
       }
     } catch (_error) {
@@ -657,8 +581,17 @@ export class MCPCommandFactory {
    */
   private static async executeAdd(argv: MCPCommandArgs): Promise<void> {
     try {
-      const name = argv.name!;
-      const command = argv.command!;
+      if (!argv.name) {
+        logger.error(chalk.red("❌ Server name is required"));
+        process.exit(1);
+      }
+      if (!argv.command) {
+        logger.error(chalk.red("❌ Server command is required"));
+        process.exit(1);
+      }
+
+      const name = argv.name;
+      const command = argv.command;
 
       const spinner = argv.quiet
         ? null
@@ -669,7 +602,7 @@ export class MCPCommandFactory {
       if (argv.env) {
         try {
           env = JSON.parse(argv.env) as Record<string, string>;
-        } catch (_error) {
+        } catch {
           if (spinner) {
             spinner.fail();
           }
@@ -731,7 +664,7 @@ export class MCPCommandFactory {
         : ora("Testing MCP server connections...").start();
 
       const sdk = new NeuroLink();
-      const rawMcpStatus = await sdk.getMCPStatus();
+      const _rawMcpStatus = await sdk.getMCPStatus();
 
       let serversToTest = await sdk.listMCPServers();
       if (targetServer) {
@@ -811,8 +744,17 @@ export class MCPCommandFactory {
    */
   private static async executeExec(argv: MCPCommandArgs): Promise<void> {
     try {
-      const serverName = argv.server!;
-      const toolName = argv.tool!;
+      if (!argv.server) {
+        logger.error(chalk.red("❌ Server name is required"));
+        process.exit(1);
+      }
+      if (!argv.tool) {
+        logger.error(chalk.red("❌ Tool name is required"));
+        process.exit(1);
+      }
+
+      const serverName = argv.server;
+      const toolName = argv.tool;
 
       const spinner = argv.quiet
         ? null
@@ -823,7 +765,7 @@ export class MCPCommandFactory {
       if (argv.params) {
         try {
           params = JSON.parse(argv.params);
-        } catch (_error) {
+        } catch {
           if (spinner) {
             spinner.fail();
           }
@@ -953,7 +895,11 @@ export class MCPCommandFactory {
    */
   private static async executeRemove(argv: MCPCommandArgs): Promise<void> {
     try {
-      const serverName = argv.server!;
+      if (!argv.server) {
+        logger.error(chalk.red("❌ Server name is required"));
+        process.exit(1);
+      }
+      const serverName = argv.server;
 
       const sdk = new NeuroLink();
       const allServers = await sdk.listMCPServers();
@@ -1152,7 +1098,7 @@ export class MCPCommandFactory {
           break; // Found config file, stop searching
         }
       }
-    } catch (_error) {
+    } catch {
       // Ignore errors in discovery
     }
 
@@ -1209,7 +1155,7 @@ export class MCPCommandFactory {
           break;
         }
       }
-    } catch (_error) {
+    } catch {
       // Ignore errors in discovery
     }
 

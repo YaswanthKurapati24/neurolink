@@ -1,20 +1,12 @@
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import type { AmazonBedrockProvider as BedrockProviderType } from "@ai-sdk/amazon-bedrock";
 import type { ZodUnknownSchema } from "../types/typeAliases.js";
-import { streamText, Output, type Schema, type LanguageModelV1 } from "ai";
-import type {
-  AIProviderName,
-  TextGenerationOptions,
-  EnhancedGenerateResult,
-} from "../core/types.js";
+import { streamText, type Schema, type LanguageModelV1 } from "ai";
+import type { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { TimeoutError } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS } from "../core/constants.js";
 import {
   validateApiKey,
@@ -121,7 +113,7 @@ export class AmazonBedrockProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ZodUnknownSchema | Schema<unknown>,
+    _analysisSchema?: ZodUnknownSchema | Schema<unknown>,
   ): Promise<StreamResult> {
     try {
       this.validateStreamOptions(options);
@@ -137,7 +129,11 @@ export class AmazonBedrockProvider extends BaseProvider {
       });
 
       return {
-        stream: (async function* () {
+        stream: (async function* (): AsyncGenerator<
+          { content: string },
+          void,
+          unknown
+        > {
           for await (const chunk of result.textStream) {
             yield { content: chunk };
           }

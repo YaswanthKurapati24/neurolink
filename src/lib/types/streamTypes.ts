@@ -1,15 +1,11 @@
-import type { Tool, Schema } from "ai";
-import type {
-  ZodUnknownSchema,
-  ValidationSchema,
-  StandardRecord,
-} from "./typeAliases.js";
+import type { Tool } from "ai";
+import type { ValidationSchema, StandardRecord } from "./typeAliases.js";
 import type {
   AIProviderName,
   AnalyticsData,
   EvaluationData,
 } from "../core/types.js";
-import type { UnknownRecord, Unknown, JsonValue } from "./common.js";
+import type { UnknownRecord, JsonValue } from "./common.js";
 import type { ChatMessage } from "./conversationTypes.js";
 
 /**

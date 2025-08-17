@@ -304,8 +304,11 @@ export class TimeoutManager {
     return `${operation}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  private createTimeoutPromise(timeoutMs: number, operationId: string) {
-    let timer: NodeJS.Timeout;
+  private createTimeoutPromise(
+    timeoutMs: number,
+    _operationId: string,
+  ): { promise: Promise<never>; timer: NodeJS.Timeout } {
+    let timer: NodeJS.Timeout | undefined;
     const promise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         reject(
@@ -313,7 +316,10 @@ export class TimeoutManager {
         );
       }, timeoutMs);
     });
-    return { promise, timer: timer! };
+    if (!timer) {
+      throw new Error("Failed to create timeout timer");
+    }
+    return { promise, timer };
   }
 
   private registerTimeout(
@@ -399,7 +405,7 @@ export async function* withStreamingTimeout<T>(
     return;
   }
 
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       reject(
@@ -422,7 +428,9 @@ export async function* withStreamingTimeout<T>(
       yield raceResult;
     }
   } finally {
-    clearTimeout(timeoutId!);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -461,7 +469,7 @@ export function createTimeoutController(
     );
   }, timeoutMs);
 
-  const cleanup = () => {
+  const cleanup = (): void => {
     clearTimeout(timer);
   };
 

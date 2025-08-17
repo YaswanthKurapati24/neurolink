@@ -5,7 +5,7 @@
 
 import type { ZodType, ZodTypeDef } from "zod";
 import type { Schema } from "ai";
-import type { JsonValue, JsonObject, UnknownRecord } from "./common.js";
+import type { JsonValue, JsonObject } from "./common.js";
 
 // ============================================================================
 // ZOD TYPE ALIASES

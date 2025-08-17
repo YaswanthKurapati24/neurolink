@@ -111,6 +111,17 @@ export class ProviderFactory {
           ) => Promise<AIProvider> | AIProvider
         )(model, providerName, sdk);
       } catch (functionError) {
+        logger.warn(
+          `Factory function failed for ${providerName}, falling back to constructor`,
+          {
+            error:
+              functionError instanceof Error
+                ? functionError.message
+                : String(functionError),
+            providerName,
+            modelName: model,
+          },
+        );
         // Fallback to constructor - ensure parameters are maintained
         result = new (registration.constructor as new (
           modelName?: string,

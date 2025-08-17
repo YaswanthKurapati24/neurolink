@@ -93,7 +93,6 @@ export function generateEnvContent(
   existingContent?: string,
 ): string {
   const lines: string[] = [];
-  const existingVars = existingContent ? parseEnvFile(existingContent) : {};
   const processedKeys = new Set<string>();
 
   // If we have existing content, preserve its structure and comments

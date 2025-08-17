@@ -11,6 +11,15 @@ import type {
   SageMakerModelConfig,
 } from "@juspay/neurolink/lib/providers/sagemaker/types";
 
+// Helper function to safely get required environment variables
+function getRequiredEnvVar(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Required environment variable ${name} is not set`);
+  }
+  return value;
+}
+
 // Example 1: Environment Variable Configuration (Recommended for Production)
 export async function createProviderFromEnvironment() {
   console.log("📋 Configuration Example 1: Environment Variables");
@@ -66,8 +75,8 @@ export async function createDevelopmentProvider() {
 
   const provider = await AIProviderFactory.createProvider("sagemaker", {
     config: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      accessKeyId: getRequiredEnvVar("AWS_ACCESS_KEY_ID"),
+      secretAccessKey: getRequiredEnvVar("AWS_SECRET_ACCESS_KEY"),
       region: "us-east-1",
       timeout: 60000, // Longer timeout for development
       maxRetries: 2, // Fewer retries for faster feedback
@@ -98,14 +107,14 @@ export async function createProductionProvider() {
 
   const provider = await AIProviderFactory.createProvider("sagemaker", {
     config: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      accessKeyId: getRequiredEnvVar("AWS_ACCESS_KEY_ID"),
+      secretAccessKey: getRequiredEnvVar("AWS_SECRET_ACCESS_KEY"),
       region: process.env.AWS_REGION || "us-east-1",
       sessionToken: process.env.AWS_SESSION_TOKEN,
       timeout: parseInt(process.env.SAGEMAKER_TIMEOUT || "30000"),
       maxRetries: parseInt(process.env.SAGEMAKER_MAX_RETRIES || "3"),
     },
-    endpointName: process.env.SAGEMAKER_PRODUCTION_ENDPOINT!,
+    endpointName: getRequiredEnvVar("SAGEMAKER_PRODUCTION_ENDPOINT"),
     modelName: process.env.SAGEMAKER_MODEL_NAME || "production-model",
   });
 
@@ -118,8 +127,8 @@ export async function createMultiRegionProviders() {
   console.log("📋 Configuration Example 5: Multi-Region Setup");
 
   const baseConfig = {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+    accessKeyId: getRequiredEnvVar("AWS_ACCESS_KEY_ID"),
+    secretAccessKey: getRequiredEnvVar("AWS_SECRET_ACCESS_KEY"),
     timeout: 30000,
     maxRetries: 3,
   };
@@ -302,8 +311,8 @@ export async function createProviderByEnvironment(
   const configurations = {
     development: {
       config: {
-        accessKeyId: process.env.DEV_AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.DEV_AWS_SECRET_ACCESS_KEY!,
+        accessKeyId: getRequiredEnvVar("DEV_AWS_ACCESS_KEY_ID"),
+        secretAccessKey: getRequiredEnvVar("DEV_AWS_SECRET_ACCESS_KEY"),
         region: "us-east-1",
         timeout: 60000,
         maxRetries: 1,
@@ -313,8 +322,8 @@ export async function createProviderByEnvironment(
     },
     staging: {
       config: {
-        accessKeyId: process.env.STAGING_AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.STAGING_AWS_SECRET_ACCESS_KEY!,
+        accessKeyId: getRequiredEnvVar("STAGING_AWS_ACCESS_KEY_ID"),
+        secretAccessKey: getRequiredEnvVar("STAGING_AWS_SECRET_ACCESS_KEY"),
         region: "us-west-2",
         timeout: 45000,
         maxRetries: 2,
@@ -324,13 +333,13 @@ export async function createProviderByEnvironment(
     },
     production: {
       config: {
-        accessKeyId: process.env.PROD_AWS_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.PROD_AWS_SECRET_ACCESS_KEY!,
+        accessKeyId: getRequiredEnvVar("PROD_AWS_ACCESS_KEY_ID"),
+        secretAccessKey: getRequiredEnvVar("PROD_AWS_SECRET_ACCESS_KEY"),
         region: process.env.PROD_AWS_REGION || "us-east-1",
         timeout: 30000,
         maxRetries: 3,
       },
-      endpointName: process.env.PROD_SAGEMAKER_ENDPOINT!,
+      endpointName: getRequiredEnvVar("PROD_SAGEMAKER_ENDPOINT"),
       modelName: "production-model",
     },
   };

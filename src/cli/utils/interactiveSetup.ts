@@ -272,7 +272,7 @@ export async function runInteractiveSetup(
       name: "selectedProviders",
       message: "Which AI providers would you like to configure?",
       choices: providerChoices,
-      validate: (answers: string[]) => {
+      validate: (answers: string[]): string | boolean => {
         if (answers.length === 0) {
           return "Please select at least one provider.";
         }
@@ -320,13 +320,13 @@ export async function runInteractiveSetup(
           name: "value",
           message: promptMessage,
           default: envVar.default,
-          validate: (input: string) => {
+          validate: (input: string): string | boolean => {
             if (!envVar.optional && !input && !hasCurrentValue) {
               return `${envVar.key} is required.`;
             }
             return true;
           },
-          when: () => {
+          when: (): boolean | Promise<boolean> => {
             if (hasCurrentValue && !envVar.optional) {
               // Ask if they want to update existing value
               return inquirer

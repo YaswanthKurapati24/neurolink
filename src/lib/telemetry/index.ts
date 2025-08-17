@@ -6,7 +6,9 @@ import { logger } from "../utils/logger.js";
  * Initialize telemetry for NeuroLink
  * OPTIONAL - Only works when NEUROLINK_TELEMETRY_ENABLED=true
  */
-export async function initializeTelemetry() {
+export async function initializeTelemetry(): Promise<
+  import("./telemetryService.js").TelemetryService
+> {
   const { TelemetryService } = await import("./telemetryService.js");
   const telemetry = TelemetryService.getInstance();
   if (telemetry.isEnabled()) {
@@ -19,7 +21,12 @@ export async function initializeTelemetry() {
 /**
  * Get telemetry status
  */
-export async function getTelemetryStatus() {
+export async function getTelemetryStatus(): Promise<{
+  enabled: boolean;
+  endpoint?: string;
+  service?: string;
+  version?: string;
+}> {
   const { TelemetryService } = await import("./telemetryService.js");
   return TelemetryService.getInstance().getStatus();
 }

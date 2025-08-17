@@ -1,20 +1,13 @@
 import { createMistral } from "@ai-sdk/mistral";
-import { streamText, Output, type Schema, type LanguageModelV1 } from "ai";
-import type {
-  ZodUnknownSchema,
-  ValidationSchema,
-} from "../types/typeAliases.js";
+import { streamText, type LanguageModelV1 } from "ai";
+import type { ValidationSchema } from "../types/typeAliases.js";
 import type { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import type { UnknownRecord } from "../types/common.js";
 import type { NeuroLink } from "../neurolink.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { TimeoutError, createTimeoutController } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS, DEFAULT_MAX_STEPS } from "../core/constants.js";
 import {
   validateApiKey,
@@ -70,7 +63,7 @@ export class MistralProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ValidationSchema,
+    _analysisSchema?: ValidationSchema,
   ): Promise<StreamResult> {
     this.validateStreamOptions(options);
 
@@ -192,7 +185,11 @@ export class MistralProvider extends BaseProvider {
   /**
    * Get provider-specific configuration
    */
-  getConfiguration() {
+  getConfiguration(): {
+    provider: string;
+    model: string;
+    defaultModel: string;
+  } {
     return {
       provider: this.providerName,
       model: this.modelName,

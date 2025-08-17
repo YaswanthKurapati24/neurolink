@@ -317,7 +317,7 @@ export const directAgentTools = {
           lastModified: string;
         }> = [];
 
-        const searchDir = (dir: string, depth = 0) => {
+        const searchDir = (dir: string, depth = 0): void => {
           if (!recursive && depth > 0) {
             return;
           }

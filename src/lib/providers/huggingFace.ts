@@ -11,7 +11,6 @@ import type { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import { createTimeoutController, TimeoutError } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS } from "../core/constants.js";
 import type { UnknownRecord } from "../types/common.js";
 import {
@@ -20,6 +19,7 @@ import {
   getProviderModel,
 } from "../utils/providerConfig.js";
 import { buildMessagesArray } from "../utils/messageBuilder.js";
+import { createTimeoutController, TimeoutError } from "../utils/timeout.js";
 
 // Configuration helpers - now using consolidated utility
 const getHuggingFaceApiKey = (): string => {
@@ -146,7 +146,7 @@ export class HuggingFaceProvider extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
+    _analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
   ): Promise<StreamResult> {
     this.validateStreamOptions(options);
 
@@ -159,7 +159,7 @@ export class HuggingFaceProvider extends BaseProvider {
 
     try {
       // Enhanced tool handling for HuggingFace models
-      const streamOptions = this.prepareStreamOptions(options, analysisSchema);
+      const streamOptions = this.prepareStreamOptions(options, _analysisSchema);
 
       // Build message array from options
       const messages = buildMessagesArray(options);
@@ -177,7 +177,11 @@ export class HuggingFaceProvider extends BaseProvider {
       timeoutController?.cleanup();
 
       // Transform stream to match StreamResult interface with enhanced tool call parsing
-      const transformedStream = async function* () {
+      const transformedStream = async function* (): AsyncGenerator<
+        { content: string },
+        void,
+        unknown
+      > {
         for await (const chunk of result.textStream) {
           yield { content: chunk };
         }
@@ -200,8 +204,13 @@ export class HuggingFaceProvider extends BaseProvider {
    */
   private prepareStreamOptions(
     options: StreamOptions,
-    analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
-  ) {
+    _analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
+  ): {
+    prompt: string;
+    system?: string;
+    tools?: ToolSet;
+    toolChoice?: string;
+  } {
     const modelSupportsTools = this.supportsTools();
 
     // If model doesn't support tools, disable them completely
@@ -222,7 +231,7 @@ export class HuggingFaceProvider extends BaseProvider {
 
     // Format tools using HuggingFace-compatible schema if tools are provided
     const formattedTools = options.tools
-      ? this.formatToolsForHuggingFace(options.tools)
+      ? (this.formatToolsForHuggingFace(options.tools) as ToolSet)
       : undefined;
 
     return {

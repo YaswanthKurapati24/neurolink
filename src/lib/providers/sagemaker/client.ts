@@ -193,13 +193,13 @@ export class SageMakerRuntimeClient {
 
       // Return the response with streaming body
       if (!response.Body) {
-        throw new SageMakerError(
-          "No response body received from streaming endpoint",
-          "MODEL_ERROR",
-          500,
-          undefined,
-          params.EndpointName,
-        );
+        throw new SageMakerError({
+          message: "No response body received from streaming endpoint",
+          code: "MODEL_ERROR",
+          statusCode: 500,
+          cause: undefined,
+          endpoint: params.EndpointName,
+        });
       }
 
       // Convert AWS response stream to async iterable of Uint8Array
@@ -443,11 +443,11 @@ export class SageMakerRuntimeClient {
         streamType: typeof awsStream,
       });
 
-      throw new SageMakerError(
-        `Stream conversion failed: ${error instanceof Error ? error.message : String(error)}`,
-        "NETWORK_ERROR",
-        500,
-      );
+      throw new SageMakerError({
+        message: `Stream conversion failed: ${error instanceof Error ? error.message : String(error)}`,
+        code: "NETWORK_ERROR",
+        statusCode: 500,
+      });
     }
   }
 
@@ -525,11 +525,11 @@ export class SageMakerRuntimeClient {
    */
   private ensureNotDisposed(): void {
     if (this.isDisposed) {
-      throw new SageMakerError(
-        "Cannot perform operation on disposed SageMaker client",
-        "VALIDATION_ERROR",
-        400,
-      );
+      throw new SageMakerError({
+        message: "Cannot perform operation on disposed SageMaker client",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     }
   }
 }

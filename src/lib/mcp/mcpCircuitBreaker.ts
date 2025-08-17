@@ -6,7 +6,6 @@
 
 import { EventEmitter } from "events";
 import { mcpLogger } from "../utils/logger.js";
-import type { JsonValue } from "../types/common.js";
 
 /**
  * Circuit breaker states
@@ -447,7 +446,11 @@ export class CircuitBreakerManager {
       );
     }
 
-    return this.breakers.get(name)!;
+    const breaker = this.breakers.get(name);
+    if (!breaker) {
+      throw new Error(`Circuit breaker not found after creation: ${name}`);
+    }
+    return breaker;
   }
 
   /**

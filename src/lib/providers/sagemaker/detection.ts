@@ -16,7 +16,7 @@ import { logger } from "../../utils/logger.js";
 /**
  * Configurable constants for detection timing and performance
  */
-const DETECTION_TEST_DELAY_MS = 100; // Base delay between detection tests (ms)
+const _DETECTION_TEST_DELAY_MS = 100; // Base delay between detection tests (ms)
 const DETECTION_STAGGER_DELAY_MS = 25; // Delay between staggered test starts (ms)
 const DETECTION_RATE_LIMIT_BACKOFF_MS = 200; // Initial backoff on rate limit detection (ms)
 
@@ -94,6 +94,19 @@ interface DetectionTestConfig {
   incrementRateLimit: () => void;
   maxRateLimitRetries: number;
   rateLimitState: { count: number }; // Use mutable object to prevent closure issues
+}
+
+/**
+ * Configuration object for handling detection test errors
+ */
+interface DetectionTestErrorConfig {
+  error: unknown;
+  test: () => Promise<void>;
+  testName: string;
+  endpointName: string;
+  incrementRateLimit: () => void;
+  maxRateLimitRetries: number;
+  rateLimitCount: number;
 }
 
 /**
@@ -187,15 +200,16 @@ export class SageMakerDetector {
   async detectModelType(endpointName: string): Promise<ModelDetectionResult> {
     const evidence: string[] = [];
     const detectionTests = [
-      () => this.testHuggingFaceSignature(endpointName, evidence),
-      () => this.testLlamaSignature(endpointName, evidence),
-      () => this.testPyTorchSignature(endpointName, evidence),
-      () => this.testTensorFlowSignature(endpointName, evidence),
+      (): Promise<void> =>
+        this.testHuggingFaceSignature(endpointName, evidence),
+      (): Promise<void> => this.testLlamaSignature(endpointName, evidence),
+      (): Promise<void> => this.testPyTorchSignature(endpointName, evidence),
+      (): Promise<void> => this.testTensorFlowSignature(endpointName, evidence),
     ];
 
     // Run detection tests in parallel with intelligent rate limiting
     const testNames = ["HuggingFace", "LLaMA", "PyTorch", "TensorFlow"];
-    const results = await this.runDetectionTestsInParallel(
+    const _results = await this.runDetectionTestsInParallel(
       detectionTests,
       testNames,
       endpointName,
@@ -374,7 +388,7 @@ export class SageMakerDetector {
       if (parsedResponse.error?.includes("transformers")) {
         evidence.push("huggingface: transformers error message");
       }
-    } catch (error) {
+    } catch {
       // Test failed, no evidence
     }
   }
@@ -408,7 +422,7 @@ export class SageMakerDetector {
       if (parsedResponse.object === "text_completion") {
         evidence.push("llama: openai text_completion object");
       }
-    } catch (error) {
+    } catch {
       // Test failed, no evidence
     }
   }
@@ -437,7 +451,7 @@ export class SageMakerDetector {
       ) {
         evidence.push("pytorch: prediction/output field pattern");
       }
-    } catch (error) {
+    } catch {
       // Test failed, no evidence
     }
   }
@@ -467,7 +481,7 @@ export class SageMakerDetector {
       if (parsedResponse.predictions) {
         evidence.push("tensorflow: serving predictions field");
       }
-    } catch (error) {
+    } catch {
       // Test failed, no evidence
     }
   }
@@ -475,7 +489,15 @@ export class SageMakerDetector {
   /**
    * Get streaming test cases for a model type
    */
-  private getStreamingTestCases(modelType: StreamingCapability["modelType"]) {
+  private getStreamingTestCases(
+    modelType: StreamingCapability["modelType"],
+  ): Array<{
+    name: string;
+    payload: Record<string, unknown>;
+    acceptHeader?: string;
+    confidence: number;
+    parameters?: Record<string, unknown>;
+  }> {
     const testCases = {
       huggingface: [
         {
@@ -648,7 +670,12 @@ export class SageMakerDetector {
   /**
    * Create a semaphore for detection test concurrency control
    */
-  private createDetectionSemaphore(maxConcurrent: number) {
+  private createDetectionSemaphore(maxConcurrent: number): {
+    count: number;
+    waiters: Array<() => void>;
+    acquire(): Promise<void>;
+    release(): void;
+  } {
     return {
       count: maxConcurrent,
       waiters: [] as Array<() => void>,
@@ -669,8 +696,10 @@ export class SageMakerDetector {
 
       release(): void {
         if (this.waiters.length > 0) {
-          const waiter = this.waiters.shift()!;
-          waiter();
+          const waiter = this.waiters.shift();
+          if (waiter) {
+            waiter();
+          }
         } else {
           this.count++;
         }
@@ -690,15 +719,15 @@ export class SageMakerDetector {
         await this.executeWithStaggeredStart(config.test, config.index);
         return { status: "fulfilled", value: undefined };
       } catch (error) {
-        const result = await this.handleDetectionTestError(
+        const result = await this.handleDetectionTestError({
           error,
-          config.test,
-          config.testName,
-          config.endpointName,
-          config.incrementRateLimit,
-          config.maxRateLimitRetries,
-          config.rateLimitState.count,
-        );
+          test: config.test,
+          testName: config.testName,
+          endpointName: config.endpointName,
+          incrementRateLimit: config.incrementRateLimit,
+          maxRateLimitRetries: config.maxRateLimitRetries,
+          rateLimitCount: config.rateLimitState.count,
+        });
         return result;
       } finally {
         config.semaphore.release();
@@ -724,28 +753,26 @@ export class SageMakerDetector {
    * Handle detection test errors with rate limiting and retry logic
    */
   private async handleDetectionTestError(
-    error: unknown,
-    test: () => Promise<void>,
-    testName: string,
-    endpointName: string,
-    incrementRateLimit: () => void,
-    maxRateLimitRetries: number,
-    rateLimitCount: number,
+    config: DetectionTestErrorConfig,
   ): Promise<PromiseSettledResult<void>> {
-    const isRateLimit = this.isRateLimitError(error);
+    const isRateLimit = this.isRateLimitError(config.error);
 
-    if (isRateLimit && rateLimitCount < maxRateLimitRetries) {
+    if (isRateLimit && config.rateLimitCount < config.maxRateLimitRetries) {
       return await this.retryWithBackoff(
-        test,
-        testName,
-        endpointName,
-        incrementRateLimit,
-        rateLimitCount,
+        config.test,
+        config.testName,
+        config.endpointName,
+        config.incrementRateLimit,
+        config.rateLimitCount,
       );
     }
 
-    this.logDetectionTestFailure(testName, endpointName, error);
-    return { status: "rejected", reason: error };
+    this.logDetectionTestFailure(
+      config.testName,
+      config.endpointName,
+      config.error,
+    );
+    return { status: "rejected", reason: config.error };
   }
 
   /**

@@ -2,15 +2,9 @@ import type { CommandModule, Argv } from "yargs";
 import { NeuroLink } from "../../lib/neurolink.js";
 import type { AIProviderName } from "../../lib/index.js";
 import type { UnknownRecord, JsonValue } from "../../lib/types/common.js";
-import type {
-  BaseCommandArgs,
-  GenerateCommandArgs,
-  StreamCommandArgs,
-  GenerateResult,
-  CommandResult,
-  OutputOptions,
-} from "../../lib/types/cli.js";
-import type { TokenUsage, AnalyticsData } from "../../lib/types/providers.js";
+import type { BaseCommandArgs, GenerateResult } from "../../lib/types/cli.js";
+import type { StreamResult } from "../../lib/types/streamTypes.js";
+import type { AnalyticsData } from "../../lib/types/providers.js";
 
 // Interface for tokens with simplified property names (as used in analytics)
 interface AnalyticsTokens {
@@ -44,7 +38,10 @@ interface CLICommandArgs extends BaseCommandArgs {
   enableAnalytics?: boolean;
   enableEvaluation?: boolean;
   domain?: string;
-  outputFormat?: "text" | "structured" | "json";
+  evaluationDomain?: string;
+  toolUsageContext?: string;
+  domainAware?: boolean;
+  outputFormat?: "text" | "structured" | "json" | "yaml";
   output?: string;
   delay?: number;
   file?: string;
@@ -225,7 +222,7 @@ export class CLICommandFactory {
   };
 
   // Helper method to build options for commands
-  private static buildOptions(yargs: Argv, additionalOptions = {}) {
+  private static buildOptions(yargs: Argv, additionalOptions = {}): Argv {
     return yargs.options({
       ...this.commonOptions,
       ...additionalOptions,
@@ -233,7 +230,32 @@ export class CLICommandFactory {
   }
 
   // Helper method to process common options
-  private static processOptions(argv: CLICommandArgs) {
+  private static processOptions(argv: CLICommandArgs): {
+    processedContext: BaseContext | undefined;
+    contextConfig: Partial<ContextConfig> | undefined;
+    provider?: AIProviderName;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+    systemPrompt?: string;
+    timeout?: number;
+    disableTools?: boolean;
+    enableAnalytics?: boolean;
+    enableEvaluation?: boolean;
+    domain?: string;
+    evaluationDomain?: string;
+    toolUsageContext?: string;
+    domainAware?: boolean;
+    context?: BaseContext;
+    debug?: boolean;
+    quiet?: boolean;
+    format?: "text" | "json" | "table" | "yaml";
+    output?: string;
+    delay?: number;
+    noColor?: boolean;
+    configFile?: string;
+    dryRun?: boolean;
+  } {
     // Handle noColor option by disabling chalk
     if (argv.noColor) {
       process.env.FORCE_COLOR = "0";
@@ -281,6 +303,8 @@ export class CLICommandFactory {
     }
 
     return {
+      processedContext,
+      contextConfig,
       provider: argv.provider === "auto" ? undefined : argv.provider,
       model: argv.model,
       temperature: argv.temperature,
@@ -294,8 +318,6 @@ export class CLICommandFactory {
       evaluationDomain: argv.evaluationDomain,
       toolUsageContext: argv.toolUsageContext,
       domainAware: argv.domainAware,
-      context: processedContext,
-      contextConfig,
       debug: argv.debug,
       quiet: argv.quiet,
       format: argv.format,
@@ -311,7 +333,7 @@ export class CLICommandFactory {
   private static handleOutput(
     result: GenerateResult | unknown,
     options: CLICommandArgs,
-  ) {
+  ): void {
     let output: string;
 
     if (options.format === "json") {
@@ -431,7 +453,7 @@ export class CLICommandFactory {
     return {
       command: ["generate <input>", "gen <input>"],
       describe: "Generate content using AI providers",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return this.buildOptions(
           yargs
             .positional("input", {
@@ -469,7 +491,7 @@ export class CLICommandFactory {
     return {
       command: "stream <input>",
       describe: "Stream generation in real-time",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return this.buildOptions(
           yargs
             .positional("input", {
@@ -502,7 +524,7 @@ export class CLICommandFactory {
     return {
       command: "batch <file>",
       describe: "Process multiple prompts from a file",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return this.buildOptions(
           yargs
             .positional("file", {
@@ -536,7 +558,7 @@ export class CLICommandFactory {
     return {
       command: "provider <subcommand>",
       describe: "Manage AI provider configurations and status",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return yargs
           .command(
             "status",
@@ -554,7 +576,7 @@ export class CLICommandFactory {
           )
           .demandCommand(1, "Please specify a provider subcommand");
       },
-      handler: () => {}, // No-op handler as subcommands handle everything
+      handler: (): void => {}, // No-op handler as subcommands handle everything
     };
   }
 
@@ -604,7 +626,7 @@ export class CLICommandFactory {
     return {
       command: "config <subcommand>",
       describe: "Manage NeuroLink configuration",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return yargs
           .command(
             "init",
@@ -657,7 +679,7 @@ export class CLICommandFactory {
           )
           .demandCommand(1, "");
       },
-      handler: () => {}, // No-op handler as subcommands handle everything
+      handler: (): void => {}, // No-op handler as subcommands handle everything
     };
   }
 
@@ -707,7 +729,9 @@ export class CLICommandFactory {
   /**
    * Execute provider status command
    */
-  private static async executeProviderStatus(argv: UnknownRecord) {
+  private static async executeProviderStatus(
+    argv: UnknownRecord,
+  ): Promise<void> {
     if (argv.verbose && !argv.quiet) {
       logger.always(
         chalk.yellow("ℹ️ Verbose mode enabled. Displaying detailed status.\n"),
@@ -820,7 +844,48 @@ export class CLICommandFactory {
   /**
    * Execute the generate command
    */
-  private static async executeGenerate(argv: CLICommandArgs) {
+  private static async executeGenerate(argv: CLICommandArgs): Promise<void> {
+    const input = await this.handleInputValidation(argv);
+    const options = this.processOptions(argv);
+    const spinner = argv.quiet ? null : ora("🤖 Generating text...").start();
+
+    try {
+      // Add delay if specified
+      if (options.delay) {
+        await new Promise((resolve) => setTimeout(resolve, options.delay));
+      }
+
+      const { inputText, contextMetadata } = await this.processContextAndInput(
+        input,
+        options,
+      );
+
+      // Handle dry-run mode
+      if (options.dryRun) {
+        return this.handleDryRun(spinner, options, contextMetadata);
+      }
+
+      // Execute generation
+      await this.executeGenerationWithSDK(
+        inputText,
+        options,
+        contextMetadata,
+        spinner,
+      );
+
+      process.exit(0);
+    } catch (error) {
+      this.handleGenerationError(error, spinner);
+      process.exit(1);
+    }
+  }
+
+  /**
+   * Handle input validation and stdin processing
+   */
+  private static async handleInputValidation(
+    argv: CLICommandArgs,
+  ): Promise<string> {
     // Handle stdin input if no input provided
     if (!argv.input && !process.stdin.isTTY) {
       let stdinData = "";
@@ -837,175 +902,226 @@ export class CLICommandFactory {
         'Input required. Use: neurolink generate "your prompt" or echo "prompt" | neurolink generate',
       );
     }
+    return argv.input;
+  }
 
-    const options = this.processOptions(argv);
-    const spinner = argv.quiet ? null : ora("🤖 Generating text...").start();
+  /**
+   * Process context and prepare input text
+   */
+  private static async processContextAndInput(
+    input: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<{ inputText: string; contextMetadata?: UnknownRecord }> {
+    let inputText = input;
+    let contextMetadata: UnknownRecord | undefined;
 
-    try {
-      // Add delay if specified
-      if (options.delay) {
-        await new Promise((resolve) => setTimeout(resolve, options.delay));
+    if (options.context && options.contextConfig) {
+      const processedContextResult = ContextFactory.processContext(
+        options.context,
+        options.contextConfig,
+      );
+
+      // Integrate context into prompt if configured
+      if (processedContextResult.processedContext) {
+        inputText = processedContextResult.processedContext + inputText;
       }
 
-      // Process context if provided
-      let inputText = argv.input as string;
-      let contextMetadata: UnknownRecord | undefined;
-
-      if (options.context && options.contextConfig) {
-        const processedContextResult = ContextFactory.processContext(
-          options.context,
-          options.contextConfig,
-        );
-
-        // Integrate context into prompt if configured
-        if (processedContextResult.processedContext) {
-          inputText = processedContextResult.processedContext + inputText;
-        }
-
-        // Add context metadata for analytics
-        contextMetadata = {
-          ...ContextFactory.extractAnalyticsContext(options.context),
-          contextMode: processedContextResult.config.mode,
-          contextTruncated: processedContextResult.metadata.truncated,
-        };
-
-        if (options.debug) {
-          logger.debug("Context processed:", {
-            mode: processedContextResult.config.mode,
-            truncated: processedContextResult.metadata.truncated,
-            processingTime: processedContextResult.metadata.processingTime,
-          });
-        }
-      }
-
-      // Handle dry-run mode for testing
-      if (options.dryRun) {
-        const mockResult = {
-          content: "Mock response for testing purposes",
-          provider: options.provider || "auto",
-          model: options.model || "test-model",
-          usage: {
-            inputTokens: 10,
-            outputTokens: 15,
-            totalTokens: 25,
-          },
-          responseTime: 150,
-          analytics: options.enableAnalytics
-            ? {
-                provider: options.provider || "auto",
-                model: options.model || "test-model",
-                tokens: { input: 10, output: 15, total: 25 },
-                cost: 0.00025,
-                responseTime: 150,
-                context: contextMetadata,
-              }
-            : undefined,
-          evaluation: options.enableEvaluation
-            ? {
-                relevance: 8,
-                accuracy: 9,
-                completeness: 8,
-                overall: 8.3,
-                isOffTopic: false,
-                alertSeverity: "none" as const,
-                reasoning: "Test evaluation response",
-                evaluationModel: "test-evaluator",
-                evaluationTime: 50,
-              }
-            : undefined,
-        };
-
-        if (spinner) {
-          spinner.succeed(chalk.green("✅ Dry-run completed successfully!"));
-        }
-
-        this.handleOutput(mockResult, options);
-
-        if (options.debug) {
-          logger.debug("\n" + chalk.yellow("Debug Information (Dry-run):"));
-          logger.debug("Provider:", mockResult.provider);
-          logger.debug("Model:", mockResult.model);
-          logger.debug("Mode: DRY-RUN (no actual API calls made)");
-        }
-
-        process.exit(0);
-        return;
-      }
-
-      const sdk = new NeuroLink();
+      // Add context metadata for analytics
+      contextMetadata = {
+        ...ContextFactory.extractAnalyticsContext(options.context),
+        contextMode: processedContextResult.config.mode,
+        contextTruncated: processedContextResult.metadata.truncated,
+      };
 
       if (options.debug) {
-        logger.debug("CLI Tools configuration:", {
-          disableTools: options.disableTools,
-          toolsEnabled: !options.disableTools,
+        logger.debug("Context processed:", {
+          mode: processedContextResult.config.mode,
+          truncated: processedContextResult.metadata.truncated,
+          processingTime: processedContextResult.metadata.processingTime,
         });
       }
-
-      const result = await sdk.generate({
-        input: { text: inputText },
-        provider: options.provider,
-        model: options.model,
-        temperature: options.temperature,
-        maxTokens: options.maxTokens,
-        systemPrompt: options.systemPrompt,
-        timeout: options.timeout,
-        disableTools: options.disableTools,
-        enableAnalytics: options.enableAnalytics,
-        enableEvaluation: options.enableEvaluation,
-        evaluationDomain: options.evaluationDomain as string | undefined,
-        toolUsageContext: options.toolUsageContext as string | undefined,
-        context: contextMetadata,
-        factoryConfig: options.domain
-          ? {
-              domainType: options.domain,
-              enhancementType: "domain-configuration",
-              validateDomainData: true,
-            }
-          : undefined,
-      });
-
-      if (spinner) {
-        spinner.succeed(chalk.green("✅ Text generated successfully!"));
-      }
-
-      // Handle output with universal formatting
-      this.handleOutput(result, options);
-
-      if (options.debug) {
-        logger.debug("\n" + chalk.yellow("Debug Information:"));
-        logger.debug("Provider:", result.provider);
-        logger.debug("Model:", result.model);
-        if (result.analytics) {
-          logger.debug("Analytics:", JSON.stringify(result.analytics, null, 2));
-        }
-        if (result.evaluation) {
-          logger.debug(
-            "Evaluation:",
-            JSON.stringify(result.evaluation, null, 2),
-          );
-        }
-      }
-
-      process.exit(0);
-    } catch (error) {
-      if (spinner) {
-        spinner.fail();
-      }
-      logger.error(
-        chalk.red(`❌ Generation failed: ${(error as Error).message}`),
-      );
-      if (options.debug) {
-        logger.error(chalk.gray((error as Error).stack));
-      }
-      process.exit(1);
     }
+
+    return { inputText, contextMetadata };
+  }
+
+  /**
+   * Handle dry-run mode
+   */
+  private static handleDryRun(
+    spinner: ReturnType<typeof ora> | null,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    contextMetadata?: UnknownRecord,
+  ): void {
+    const mockResult = {
+      content: "Mock response for testing purposes",
+      provider: options.provider || "auto",
+      model: options.model || "test-model",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 15,
+        totalTokens: 25,
+      },
+      responseTime: 150,
+      analytics: options.enableAnalytics
+        ? {
+            provider: options.provider || "auto",
+            model: options.model || "test-model",
+            tokens: { input: 10, output: 15, total: 25 },
+            cost: 0.00025,
+            responseTime: 150,
+            context: contextMetadata,
+          }
+        : undefined,
+      evaluation: options.enableEvaluation
+        ? {
+            relevance: 8,
+            accuracy: 9,
+            completeness: 8,
+            overall: 8.3,
+            isOffTopic: false,
+            alertSeverity: "none" as const,
+            reasoning: "Test evaluation response",
+            evaluationModel: "test-evaluator",
+            evaluationTime: 50,
+          }
+        : undefined,
+    };
+
+    if (spinner) {
+      spinner.succeed(chalk.green("✅ Dry-run completed successfully!"));
+    }
+
+    this.handleOutput(mockResult, options);
+
+    if (options.debug) {
+      logger.debug("\n" + chalk.yellow("Debug Information (Dry-run):"));
+      logger.debug("Provider:", mockResult.provider);
+      logger.debug("Model:", mockResult.model);
+      logger.debug("Mode: DRY-RUN (no actual API calls made)");
+    }
+
+    process.exit(0);
+  }
+
+  /**
+   * Execute generation with SDK
+   */
+  private static async executeGenerationWithSDK(
+    inputText: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    contextMetadata: UnknownRecord | undefined,
+    spinner: ReturnType<typeof ora> | null,
+  ): Promise<void> {
+    const sdk = new NeuroLink();
+
+    if (options.debug) {
+      logger.debug("CLI Tools configuration:", {
+        disableTools: options.disableTools,
+        toolsEnabled: !options.disableTools,
+      });
+    }
+
+    const result = await sdk.generate({
+      input: { text: inputText },
+      provider: options.provider,
+      model: options.model,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      systemPrompt: options.systemPrompt,
+      timeout: options.timeout,
+      disableTools: options.disableTools,
+      enableAnalytics: options.enableAnalytics,
+      enableEvaluation: options.enableEvaluation,
+      evaluationDomain: options.evaluationDomain as string | undefined,
+      toolUsageContext: options.toolUsageContext as string | undefined,
+      context: contextMetadata,
+      factoryConfig: options.domain
+        ? {
+            domainType: options.domain,
+            enhancementType: "domain-configuration",
+            validateDomainData: true,
+          }
+        : undefined,
+    });
+
+    if (spinner) {
+      spinner.succeed(chalk.green("✅ Text generated successfully!"));
+    }
+
+    // Handle output with universal formatting
+    this.handleOutput(result, options);
+
+    if (options.debug) {
+      logger.debug("\n" + chalk.yellow("Debug Information:"));
+      logger.debug("Provider:", result.provider);
+      logger.debug("Model:", result.model);
+      if (result.analytics) {
+        logger.debug("Analytics:", JSON.stringify(result.analytics, null, 2));
+      }
+      if (result.evaluation) {
+        logger.debug("Evaluation:", JSON.stringify(result.evaluation, null, 2));
+      }
+    }
+  }
+
+  /**
+   * Handle generation errors
+   */
+  private static handleGenerationError(
+    error: unknown,
+    spinner: ReturnType<typeof ora> | null,
+  ): void {
+    if (spinner) {
+      spinner.fail();
+    }
+    logger.error(
+      chalk.red(`❌ Generation failed: ${(error as Error).message}`),
+    );
   }
 
   /**
    * Execute the stream command
    */
-  private static async executeStream(argv: CLICommandArgs) {
-    // Handle stdin input if no input provided
+  private static async executeStream(argv: CLICommandArgs): Promise<void> {
+    const inputText = await this.handleStreamInput(argv);
+    const options = this.processOptions(argv);
+
+    if (!options.quiet) {
+      logger.always(chalk.blue("🔄 Streaming..."));
+    }
+
+    try {
+      await this.handleStreamDelay(options);
+      const { processedInput, contextMetadata } =
+        await this.processStreamContext(inputText, options);
+
+      if (options.dryRun) {
+        await this.handleStreamDryRun(options, contextMetadata);
+        return;
+      }
+
+      const stream = await this.createStream(
+        processedInput,
+        options,
+        contextMetadata,
+      );
+      const fullContent = await this.processStreamChunks(stream, options);
+
+      await this.handleStreamPostProcessing(stream, fullContent, options);
+
+      process.exit(0);
+    } catch (error) {
+      this.handleStreamError(error as Error, options);
+    }
+  }
+
+  /**
+   * Handle input validation and stdin processing for stream command
+   */
+  private static async handleStreamInput(
+    argv: CLICommandArgs,
+  ): Promise<string> {
     if (!argv.input && !process.stdin.isTTY) {
       let stdinData = "";
       process.stdin.setEncoding("utf8");
@@ -1021,258 +1137,374 @@ export class CLICommandFactory {
         'Input required. Use: neurolink stream "your prompt" or echo "prompt" | neurolink stream',
       );
     }
+    return argv.input as string;
+  }
 
-    const options = this.processOptions(argv);
+  /**
+   * Handle delay if specified
+   */
+  private static async handleStreamDelay(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    if (options.delay) {
+      await new Promise((resolve) => setTimeout(resolve, options.delay));
+    }
+  }
 
-    if (!options.quiet) {
-      logger.always(chalk.blue("🔄 Streaming..."));
+  /**
+   * Process context for streaming
+   */
+  private static async processStreamContext(
+    inputText: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<{
+    processedInput: string;
+    contextMetadata: UnknownRecord | undefined;
+  }> {
+    let processedInput = inputText;
+    let contextMetadata: UnknownRecord | undefined;
+
+    if (options.context && options.contextConfig) {
+      const processedContextResult = ContextFactory.processContext(
+        options.context,
+        options.contextConfig,
+      );
+
+      if (processedContextResult.processedContext) {
+        processedInput = processedContextResult.processedContext + inputText;
+      }
+
+      contextMetadata = {
+        ...ContextFactory.extractAnalyticsContext(options.context),
+        contextMode: processedContextResult.config.mode,
+        contextTruncated: processedContextResult.metadata.truncated,
+      };
+
+      if (options.debug) {
+        logger.debug("Context processed for streaming:", {
+          mode: processedContextResult.config.mode,
+          truncated: processedContextResult.metadata.truncated,
+          processingTime: processedContextResult.metadata.processingTime,
+        });
+      }
     }
 
-    try {
-      // Add delay if specified
-      if (options.delay) {
+    return { processedInput, contextMetadata };
+  }
+
+  /**
+   * Handle dry-run mode for streaming
+   */
+  private static async handleStreamDryRun(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    contextMetadata: UnknownRecord | undefined,
+  ): Promise<void> {
+    if (!options.quiet) {
+      logger.always(chalk.blue("🔄 Dry-run streaming..."));
+    }
+
+    const fullContent = await this.simulateStreamingOutput();
+    await this.displayDryRunAnalytics(options, contextMetadata, fullContent);
+    await this.displayDryRunEvaluation(options);
+    this.handleDryRunOutput(options, fullContent);
+    this.displayDryRunDebug(options);
+
+    process.exit(0);
+  }
+
+  /**
+   * Simulate streaming output for dry-run
+   */
+  private static async simulateStreamingOutput(): Promise<string> {
+    const chunks = [
+      "Mock ",
+      "streaming ",
+      "response ",
+      "for ",
+      "testing ",
+      "purposes",
+    ];
+    let fullContent = "";
+
+    for (const chunk of chunks) {
+      process.stdout.write(chunk);
+      fullContent += chunk;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    return fullContent;
+  }
+
+  /**
+   * Display analytics for dry-run mode
+   */
+  private static async displayDryRunAnalytics(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    contextMetadata: UnknownRecord | undefined,
+    fullContent: string,
+  ): Promise<void> {
+    if (options.enableAnalytics) {
+      const mockAnalytics: AnalyticsData = {
+        provider: options.provider || "auto",
+        model: options.model || "test-model",
+        requestDuration: 300,
+        tokenUsage: {
+          inputTokens: 10,
+          outputTokens: 15,
+          totalTokens: 25,
+        },
+        timestamp: Date.now(),
+        context: contextMetadata as JsonValue,
+      };
+
+      const mockGenerateResult: GenerateResult = {
+        success: true,
+        content: fullContent,
+        analytics: mockAnalytics,
+        model: mockAnalytics.model,
+        toolsUsed: [],
+      };
+
+      const analyticsDisplay =
+        this.formatAnalyticsForTextMode(mockGenerateResult);
+      logger.always(analyticsDisplay);
+    }
+  }
+
+  /**
+   * Display evaluation for dry-run mode
+   */
+  private static async displayDryRunEvaluation(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    if (options.enableEvaluation) {
+      logger.always(chalk.blue("\n📊 Response Evaluation (Dry-run):"));
+      logger.always(`   Relevance: 8/10`);
+      logger.always(`   Accuracy: 9/10`);
+      logger.always(`   Completeness: 8/10`);
+      logger.always(`   Overall: 8.3/10`);
+      logger.always(`   Reasoning: Test evaluation response`);
+    }
+  }
+
+  /**
+   * Handle output for dry-run mode
+   */
+  private static handleDryRunOutput(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    fullContent: string,
+  ): void {
+    if (!options.quiet) {
+      process.stdout.write("\n");
+    }
+
+    if (options.output) {
+      fs.writeFileSync(options.output, fullContent);
+      if (!options.quiet) {
+        logger.always(`\nOutput saved to ${options.output}`);
+      }
+    }
+  }
+
+  /**
+   * Display debug information for dry-run mode
+   */
+  private static displayDryRunDebug(
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): void {
+    if (options.debug) {
+      logger.debug(
+        "\n" + chalk.yellow("Debug Information (Dry-run Streaming):"),
+      );
+      logger.debug("Provider:", options.provider || "auto");
+      logger.debug("Model:", options.model || "test-model");
+      logger.debug("Mode: DRY-RUN (no actual API calls made)");
+    }
+  }
+
+  /**
+   * Create stream using NeuroLink SDK
+   */
+  private static async createStream(
+    inputText: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+    contextMetadata: UnknownRecord | undefined,
+  ): Promise<StreamResult> {
+    const sdk = new NeuroLink();
+    return await sdk.stream({
+      input: { text: inputText },
+      provider: options.provider,
+      model: options.model,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      systemPrompt: options.systemPrompt,
+      timeout: options.timeout,
+      disableTools: options.disableTools,
+      enableAnalytics: options.enableAnalytics,
+      enableEvaluation: options.enableEvaluation,
+      context: contextMetadata,
+      factoryConfig: options.domain
+        ? {
+            domainType: options.domain,
+            enhancementType: "domain-configuration",
+            validateDomainData: true,
+          }
+        : undefined,
+    });
+  }
+
+  /**
+   * Process stream chunks and return full content
+   */
+  private static async processStreamChunks(
+    stream: Awaited<ReturnType<NeuroLink["stream"]>>,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<string> {
+    let fullContent = "";
+
+    for await (const chunk of stream.stream) {
+      if (options.delay && options.delay > 0) {
         await new Promise((resolve) => setTimeout(resolve, options.delay));
       }
 
-      // Process context if provided (same as generate command)
-      let inputText = argv.input as string;
-      let contextMetadata: UnknownRecord | undefined;
+      process.stdout.write(chunk.content);
+      fullContent += chunk.content;
+    }
 
-      if (options.context && options.contextConfig) {
-        const processedContextResult = ContextFactory.processContext(
-          options.context,
-          options.contextConfig,
-        );
+    if (!options.quiet) {
+      process.stdout.write("\n");
+    }
 
-        // Integrate context into prompt if configured
-        if (processedContextResult.processedContext) {
-          inputText = processedContextResult.processedContext + inputText;
-        }
+    return fullContent;
+  }
 
-        // Add context metadata for analytics
-        contextMetadata = {
-          ...ContextFactory.extractAnalyticsContext(options.context),
-          contextMode: processedContextResult.config.mode,
-          contextTruncated: processedContextResult.metadata.truncated,
-        };
+  /**
+   * Handle post-processing after streaming (analytics, evaluation, output, debug)
+   */
+  private static async handleStreamPostProcessing(
+    stream: Awaited<ReturnType<NeuroLink["stream"]>>,
+    fullContent: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    await this.displayStreamAnalytics(stream, fullContent, options);
+    await this.displayStreamEvaluation(stream, options);
+    this.handleStreamOutput(fullContent, options);
+    await this.displayStreamDebug(stream, options);
+  }
 
-        if (options.debug) {
-          logger.debug("Context processed for streaming:", {
-            mode: processedContextResult.config.mode,
-            truncated: processedContextResult.metadata.truncated,
-            processingTime: processedContextResult.metadata.processingTime,
-          });
-        }
+  /**
+   * Display analytics after streaming
+   */
+  private static async displayStreamAnalytics(
+    stream: Awaited<ReturnType<NeuroLink["stream"]>>,
+    fullContent: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    if (options.enableAnalytics && stream.analytics) {
+      const resolvedAnalytics = await (stream.analytics instanceof Promise
+        ? stream.analytics
+        : Promise.resolve(stream.analytics));
+      const streamAnalytics = {
+        success: true,
+        content: fullContent,
+        analytics: resolvedAnalytics,
+        model: stream.model,
+        toolsUsed: stream.toolCalls?.map((tc) => tc.toolName) || [],
+      };
+      const analyticsDisplay = this.formatAnalyticsForTextMode(
+        streamAnalytics as unknown as GenerateResult,
+      );
+      logger.always(analyticsDisplay);
+    }
+  }
+
+  /**
+   * Display evaluation after streaming
+   */
+  private static async displayStreamEvaluation(
+    stream: Awaited<ReturnType<NeuroLink["stream"]>>,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    if (options.enableEvaluation && stream.evaluation) {
+      const resolvedEvaluation = await (stream.evaluation instanceof Promise
+        ? stream.evaluation
+        : Promise.resolve(stream.evaluation));
+      logger.always(chalk.blue("\n📊 Response Evaluation:"));
+      logger.always(`   Relevance: ${resolvedEvaluation.relevance}/10`);
+      logger.always(`   Accuracy: ${resolvedEvaluation.accuracy}/10`);
+      logger.always(`   Completeness: ${resolvedEvaluation.completeness}/10`);
+      logger.always(`   Overall: ${resolvedEvaluation.overall}/10`);
+      if (resolvedEvaluation.reasoning) {
+        logger.always(`   Reasoning: ${resolvedEvaluation.reasoning}`);
       }
+    }
+  }
 
-      // Handle dry-run mode for testing
-      if (options.dryRun) {
-        if (!options.quiet) {
-          logger.always(chalk.blue("🔄 Dry-run streaming..."));
-        }
-
-        // Simulate streaming output
-        const chunks = [
-          "Mock ",
-          "streaming ",
-          "response ",
-          "for ",
-          "testing ",
-          "purposes",
-        ];
-        let fullContent = "";
-
-        for (const chunk of chunks) {
-          process.stdout.write(chunk);
-          fullContent += chunk;
-          await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate streaming delay
-        }
-
-        if (!options.quiet) {
-          process.stdout.write("\n");
-        }
-
-        // Mock analytics and evaluation for dry-run
-        if (options.enableAnalytics) {
-          const mockAnalytics: AnalyticsData = {
-            provider: options.provider || "auto",
-            model: options.model || "test-model",
-            requestDuration: 300,
-            tokenUsage: {
-              inputTokens: 10,
-              outputTokens: 15,
-              totalTokens: 25,
-            },
-            timestamp: Date.now(),
-            context: contextMetadata as JsonValue,
-          };
-
-          const mockGenerateResult: GenerateResult = {
-            success: true,
-            content: fullContent,
-            analytics: mockAnalytics,
-            model: mockAnalytics.model,
-            toolsUsed: [],
-          };
-
-          const analyticsDisplay =
-            this.formatAnalyticsForTextMode(mockGenerateResult);
-          logger.always(analyticsDisplay);
-        }
-
-        if (options.enableEvaluation) {
-          logger.always(chalk.blue("\n📊 Response Evaluation (Dry-run):"));
-          logger.always(`   Relevance: 8/10`);
-          logger.always(`   Accuracy: 9/10`);
-          logger.always(`   Completeness: 8/10`);
-          logger.always(`   Overall: 8.3/10`);
-          logger.always(`   Reasoning: Test evaluation response`);
-        }
-
-        if (options.output) {
-          fs.writeFileSync(options.output, fullContent);
-          if (!options.quiet) {
-            logger.always(`\nOutput saved to ${options.output}`);
-          }
-        }
-
-        if (options.debug) {
-          logger.debug(
-            "\n" + chalk.yellow("Debug Information (Dry-run Streaming):"),
-          );
-          logger.debug("Provider:", options.provider || "auto");
-          logger.debug("Model:", options.model || "test-model");
-          logger.debug("Mode: DRY-RUN (no actual API calls made)");
-        }
-
-        process.exit(0);
-        return;
-      }
-
-      const sdk = new NeuroLink();
-      const stream = await sdk.stream({
-        input: { text: inputText },
-        provider: options.provider,
-        model: options.model,
-        temperature: options.temperature,
-        maxTokens: options.maxTokens,
-        systemPrompt: options.systemPrompt,
-        timeout: options.timeout,
-        disableTools: options.disableTools,
-        enableAnalytics: options.enableAnalytics,
-        enableEvaluation: options.enableEvaluation,
-        context: contextMetadata,
-        factoryConfig: options.domain
-          ? {
-              domainType: options.domain,
-              enhancementType: "domain-configuration",
-              validateDomainData: true,
-            }
-          : undefined,
-      });
-
-      let fullContent = "";
-
-      // Process the stream
-      for await (const chunk of stream.stream) {
-        if (options.delay && options.delay > 0) {
-          // Demo mode - add delay between chunks
-          await new Promise((resolve) => setTimeout(resolve, options.delay));
-        }
-
-        process.stdout.write(chunk.content);
-        fullContent += chunk.content;
-      }
-
+  /**
+   * Handle output file if specified
+   */
+  private static handleStreamOutput(
+    fullContent: string,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): void {
+    if (options.output) {
+      fs.writeFileSync(options.output, fullContent);
       if (!options.quiet) {
-        process.stdout.write("\n");
+        logger.always(`\nOutput saved to ${options.output}`);
       }
+    }
+  }
 
-      // 🔧 NEW: Display analytics and evaluation after streaming (similar to generate command)
-      if (options.enableAnalytics && stream.analytics) {
+  /**
+   * Display debug output for streaming
+   */
+  private static async displayStreamDebug(
+    stream: Awaited<ReturnType<NeuroLink["stream"]>>,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): Promise<void> {
+    if (options.debug) {
+      logger.debug("\n" + chalk.yellow("Debug Information (Streaming):"));
+      logger.debug("Provider:", stream.provider);
+      logger.debug("Model:", stream.model);
+      if (stream.analytics) {
         const resolvedAnalytics = await (stream.analytics instanceof Promise
           ? stream.analytics
           : Promise.resolve(stream.analytics));
-        const streamAnalytics = {
-          success: true,
-          content: fullContent,
-          analytics: resolvedAnalytics,
-          model: stream.model,
-          toolsUsed: stream.toolCalls?.map((tc) => tc.toolName) || [],
-        };
-        const analyticsDisplay = this.formatAnalyticsForTextMode(
-          streamAnalytics as unknown as GenerateResult,
-        );
-        logger.always(analyticsDisplay);
+        logger.debug("Analytics:", JSON.stringify(resolvedAnalytics, null, 2));
       }
-
-      // 🔧 NEW: Display evaluation after streaming
-      if (options.enableEvaluation && stream.evaluation) {
+      if (stream.evaluation) {
         const resolvedEvaluation = await (stream.evaluation instanceof Promise
           ? stream.evaluation
           : Promise.resolve(stream.evaluation));
-        logger.always(chalk.blue("\n📊 Response Evaluation:"));
-        logger.always(`   Relevance: ${resolvedEvaluation.relevance}/10`);
-        logger.always(`   Accuracy: ${resolvedEvaluation.accuracy}/10`);
-        logger.always(`   Completeness: ${resolvedEvaluation.completeness}/10`);
-        logger.always(`   Overall: ${resolvedEvaluation.overall}/10`);
-        if (resolvedEvaluation.reasoning) {
-          logger.always(`   Reasoning: ${resolvedEvaluation.reasoning}`);
-        }
+        logger.debug(
+          "Evaluation:",
+          JSON.stringify(resolvedEvaluation, null, 2),
+        );
       }
-
-      // Handle output file if specified
-      if (options.output) {
-        fs.writeFileSync(options.output, fullContent);
-        if (!options.quiet) {
-          logger.always(`\nOutput saved to ${options.output}`);
-        }
+      if (stream.metadata) {
+        logger.debug("Metadata:", JSON.stringify(stream.metadata, null, 2));
       }
-
-      // 🔧 NEW: Debug output for streaming (similar to generate command)
-      if (options.debug) {
-        logger.debug("\n" + chalk.yellow("Debug Information (Streaming):"));
-        logger.debug("Provider:", stream.provider);
-        logger.debug("Model:", stream.model);
-        if (stream.analytics) {
-          const resolvedAnalytics = await (stream.analytics instanceof Promise
-            ? stream.analytics
-            : Promise.resolve(stream.analytics));
-          logger.debug(
-            "Analytics:",
-            JSON.stringify(resolvedAnalytics, null, 2),
-          );
-        }
-        if (stream.evaluation) {
-          const resolvedEvaluation = await (stream.evaluation instanceof Promise
-            ? stream.evaluation
-            : Promise.resolve(stream.evaluation));
-          logger.debug(
-            "Evaluation:",
-            JSON.stringify(resolvedEvaluation, null, 2),
-          );
-        }
-        if (stream.metadata) {
-          logger.debug("Metadata:", JSON.stringify(stream.metadata, null, 2));
-        }
-      }
-
-      process.exit(0);
-    } catch (error) {
-      logger.error(
-        chalk.red(`❌ Streaming failed: ${(error as Error).message}`),
-      );
-      if (options.debug) {
-        logger.error(chalk.gray((error as Error).stack));
-      }
-      process.exit(1);
     }
+  }
+
+  /**
+   * Handle stream execution errors
+   */
+  private static handleStreamError(
+    error: Error,
+    options: ReturnType<typeof CLICommandFactory.processOptions>,
+  ): void {
+    logger.error(chalk.red(`❌ Streaming failed: ${error.message}`));
+    if (options.debug) {
+      logger.error(chalk.gray(error.stack));
+    }
+    process.exit(1);
   }
 
   /**
    * Execute the batch command
    */
-  private static async executeBatch(argv: CLICommandArgs) {
+  private static async executeBatch(argv: CLICommandArgs): Promise<void> {
     const options = this.processOptions(argv);
     const spinner = options.quiet ? null : ora().start();
 
@@ -1423,7 +1655,9 @@ export class CLICommandFactory {
   /**
    * Execute config export command
    */
-  private static async executeConfigExport(argv: CLICommandArgs) {
+  private static async executeConfigExport(
+    argv: CLICommandArgs,
+  ): Promise<void> {
     const options = this.processOptions(argv);
 
     try {
@@ -1465,7 +1699,9 @@ export class CLICommandFactory {
   /**
    * Execute get best provider command
    */
-  private static async executeGetBestProvider(argv: CLICommandArgs) {
+  private static async executeGetBestProvider(
+    argv: CLICommandArgs,
+  ): Promise<void> {
     const options = this.processOptions(argv);
 
     try {
@@ -1496,7 +1732,7 @@ export class CLICommandFactory {
   /**
    * Execute completion command
    */
-  private static async executeCompletion(argv: CLICommandArgs) {
+  private static async executeCompletion(argv: CLICommandArgs): Promise<void> {
     try {
       // Generate shell completion script as concatenated strings to avoid template literal issues
       const completionScript =

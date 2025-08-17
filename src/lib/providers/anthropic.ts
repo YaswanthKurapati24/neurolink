@@ -1,25 +1,17 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { streamText, Output, type Schema, type LanguageModelV1 } from "ai";
+import { streamText, type LanguageModelV1 } from "ai";
 import type { ValidationSchema } from "../types/typeAliases.js";
-import type {
-  AIProviderName,
-  TextGenerationOptions,
-  EnhancedGenerateResult,
-} from "../core/types.js";
+import type { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
-import type { Unknown, UnknownRecord, JsonValue } from "../types/common.js";
+import type { UnknownRecord, JsonValue } from "../types/common.js";
 import type { NeuroLink } from "../neurolink.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { createTimeoutController, TimeoutError } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS, DEFAULT_MAX_STEPS } from "../core/constants.js";
 import {
-  validateApiKey,
   createAnthropicConfig,
+  validateApiKey,
   getProviderModel,
 } from "../utils/providerConfig.js";
 import { buildMessagesArray } from "../utils/messageBuilder.js";
@@ -79,77 +71,140 @@ export class AnthropicProvider extends BaseProvider {
 
   protected handleProviderError(error: unknown): Error {
     if (error instanceof TimeoutError) {
-      return new Error(
-        `Anthropic request timed out after ${error.timeout}ms: ${error.message}`,
-      );
+      return this.handleTimeoutError(error);
     }
 
     const errorRecord = error as UnknownRecord;
+    const errorMessage = this.extractErrorMessage(errorRecord);
 
-    // Handle API key errors
-    if (
-      (typeof errorRecord?.message === "string" &&
-        errorRecord.message.includes("API_KEY_INVALID")) ||
-      (typeof errorRecord?.message === "string" &&
-        errorRecord.message.includes("Invalid API key"))
-    ) {
-      return new Error(
-        "Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.",
-      );
+    if (this.isApiKeyError(errorMessage)) {
+      return this.createApiKeyError();
     }
 
-    // Handle rate limiting errors
-    if (
-      typeof errorRecord?.message === "string" &&
-      (errorRecord.message.includes("rate limit") ||
-        errorRecord.message.includes("too_many_requests") ||
-        errorRecord.message.includes("429"))
-    ) {
-      return new Error(
-        "Anthropic rate limit exceeded. Please try again later.",
-      );
+    if (this.isRateLimitError(errorMessage)) {
+      return this.createRateLimitError();
     }
 
-    // Handle connection errors
-    if (
-      typeof errorRecord?.message === "string" &&
-      (errorRecord.message.includes("ECONNRESET") ||
-        errorRecord.message.includes("ENOTFOUND") ||
-        errorRecord.message.includes("ECONNREFUSED") ||
-        errorRecord.message.includes("network") ||
-        errorRecord.message.includes("connection"))
-    ) {
-      return new Error(
-        "Anthropic API connection error. Please check your internet connection and try again.",
-      );
+    if (this.isConnectionError(errorMessage)) {
+      return this.createConnectionError();
     }
 
-    // Handle server errors
-    if (
-      typeof errorRecord?.message === "string" &&
-      (errorRecord.message.includes("500") ||
-        errorRecord.message.includes("502") ||
-        errorRecord.message.includes("503") ||
-        errorRecord.message.includes("504") ||
-        errorRecord.message.includes("server error"))
-    ) {
-      return new Error(
-        "Anthropic API server error. Please try again in a few moments.",
-      );
+    if (this.isServerError(errorMessage)) {
+      return this.createServerError();
     }
 
-    const message =
-      typeof errorRecord?.message === "string"
-        ? errorRecord.message
-        : "Unknown error";
-    return new Error(`Anthropic error: ${message}`);
+    return this.createGenericError(errorMessage);
+  }
+
+  /**
+   * Handle timeout errors
+   */
+  private handleTimeoutError(error: TimeoutError): Error {
+    return new Error(
+      `Anthropic request timed out after ${error.timeout}ms: ${error.message}`,
+    );
+  }
+
+  /**
+   * Extract error message from error record
+   */
+  private extractErrorMessage(errorRecord: UnknownRecord): string {
+    return typeof errorRecord?.message === "string" ? errorRecord.message : "";
+  }
+
+  /**
+   * Check if error is related to API key
+   */
+  private isApiKeyError(message: string): boolean {
+    return (
+      message.includes("API_KEY_INVALID") || message.includes("Invalid API key")
+    );
+  }
+
+  /**
+   * Check if error is related to rate limiting
+   */
+  private isRateLimitError(message: string): boolean {
+    return (
+      message.includes("rate limit") ||
+      message.includes("too_many_requests") ||
+      message.includes("429")
+    );
+  }
+
+  /**
+   * Check if error is related to connection
+   */
+  private isConnectionError(message: string): boolean {
+    return (
+      message.includes("ECONNRESET") ||
+      message.includes("ENOTFOUND") ||
+      message.includes("ECONNREFUSED") ||
+      message.includes("network") ||
+      message.includes("connection")
+    );
+  }
+
+  /**
+   * Check if error is related to server
+   */
+  private isServerError(message: string): boolean {
+    return (
+      message.includes("500") ||
+      message.includes("502") ||
+      message.includes("503") ||
+      message.includes("504") ||
+      message.includes("server error")
+    );
+  }
+
+  /**
+   * Create API key error
+   */
+  private createApiKeyError(): Error {
+    return new Error(
+      "Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.",
+    );
+  }
+
+  /**
+   * Create rate limit error
+   */
+  private createRateLimitError(): Error {
+    return new Error("Anthropic rate limit exceeded. Please try again later.");
+  }
+
+  /**
+   * Create connection error
+   */
+  private createConnectionError(): Error {
+    return new Error(
+      "Anthropic API connection error. Please check your internet connection and try again.",
+    );
+  }
+
+  /**
+   * Create server error
+   */
+  private createServerError(): Error {
+    return new Error(
+      "Anthropic API server error. Please try again in a few moments.",
+    );
+  }
+
+  /**
+   * Create generic error
+   */
+  private createGenericError(message: string): Error {
+    const errorMessage = message || "Unknown error";
+    return new Error(`Anthropic error: ${errorMessage}`);
   }
 
   // executeGenerate removed - BaseProvider handles all generation with tools
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ValidationSchema,
+    _analysisSchema?: ValidationSchema,
   ): Promise<StreamResult> {
     this.validateStreamOptions(options);
 

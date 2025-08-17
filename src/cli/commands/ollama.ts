@@ -5,7 +5,7 @@ import ora from "ora";
 import inquirer from "inquirer";
 
 import { logger } from "../../lib/utils/logger.js";
-export function addOllamaCommands(cli: Argv) {
+export function addOllamaCommands(cli: Argv): Argv {
   cli.command(
     "ollama <command>",
     "Manage Ollama local AI models",
@@ -49,9 +49,10 @@ export function addOllamaCommands(cli: Argv) {
     },
     () => {}, // No-op handler as subcommands handle everything
   );
+  return cli;
 }
 
-async function listModelsHandler() {
+async function listModelsHandler(): Promise<void> {
   const spinner = ora("Fetching installed models...").start();
   try {
     const output = execSync("ollama list", { encoding: "utf8" });
@@ -75,7 +76,7 @@ async function listModelsHandler() {
   }
 }
 
-async function pullModelHandler(argv: { model: string }) {
+async function pullModelHandler(argv: { model: string }): Promise<void> {
   const { model } = argv;
   logger.always(chalk.blue(`Downloading model: ${model}`));
   logger.always(chalk.gray("This may take several minutes..."));
@@ -96,7 +97,7 @@ async function pullModelHandler(argv: { model: string }) {
   }
 }
 
-async function removeModelHandler(argv: { model: string }) {
+async function removeModelHandler(argv: { model: string }): Promise<void> {
   const { model } = argv;
 
   // Confirm removal
@@ -126,7 +127,7 @@ async function removeModelHandler(argv: { model: string }) {
   }
 }
 
-async function statusHandler() {
+async function statusHandler(): Promise<void> {
   const spinner = ora("Checking Ollama service status...").start();
 
   try {
@@ -159,7 +160,7 @@ async function statusHandler() {
   }
 }
 
-async function startHandler() {
+async function startHandler(): Promise<void> {
   logger.always(chalk.blue("Starting Ollama service..."));
 
   try {
@@ -216,7 +217,7 @@ async function startHandler() {
   }
 }
 
-async function stopHandler() {
+async function stopHandler(): Promise<void> {
   const spinner = ora("Stopping Ollama service...").start();
 
   try {
@@ -247,7 +248,7 @@ async function stopHandler() {
   }
 }
 
-async function setupHandler() {
+async function setupHandler(): Promise<void> {
   logger.always(chalk.blue("🦙 Welcome to Ollama Setup!\n"));
 
   // Check if Ollama is installed
@@ -368,7 +369,7 @@ async function setupHandler() {
             type: "input",
             name: "customModel",
             message: "Enter the model name:",
-            validate: (input) =>
+            validate: (input: string): string | boolean =>
               input.trim().length > 0 || "Model name is required",
           },
         ]);

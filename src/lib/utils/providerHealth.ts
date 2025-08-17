@@ -523,7 +523,12 @@ export class ProviderHealthChecker {
 
         // Validate credentials file if provided
         if (hasCredentialsFile) {
-          const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS!;
+          const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+          if (!credPath) {
+            throw new Error(
+              "GOOGLE_APPLICATION_CREDENTIALS environment variable is required but not set",
+            );
+          }
           const fileName = basename(credPath);
           // Use regex to match .json files with optional backup extensions
           const jsonFilePattern = /\.json(\.\w+)?$/;

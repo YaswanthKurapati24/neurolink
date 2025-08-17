@@ -102,7 +102,7 @@ describe("Unified Tool Registration", () => {
       op: "add",
     });
     // Tool execution now returns ToolResult object, extract the data field
-    const addValue = (addResult as any)?.data ?? addResult;
+    const addValue = (addResult as { data?: unknown })?.data ?? addResult;
     expect(addValue).toBe(8);
 
     const multiplyResult = await neurolink.executeTool("calculator", {
@@ -111,7 +111,8 @@ describe("Unified Tool Registration", () => {
       op: "multiply",
     });
     // Tool execution now returns ToolResult object, extract the data field
-    const multiplyValue = (multiplyResult as any)?.data ?? multiplyResult;
+    const multiplyValue =
+      (multiplyResult as { data?: unknown })?.data ?? multiplyResult;
     expect(multiplyValue).toBe(24);
   });
 
@@ -195,11 +196,15 @@ describe("Unified Tool Registration", () => {
     const arrayResult = await neurolink.executeTool("array_tool", {});
     const objectResult = await neurolink.executeTool("object_tool", {});
 
-    expect((individualResult as any)?.data ?? individualResult).toBe(
-      "individual",
+    expect(
+      (individualResult as { data?: unknown })?.data ?? individualResult,
+    ).toBe("individual");
+    expect((arrayResult as { data?: unknown })?.data ?? arrayResult).toBe(
+      "array",
     );
-    expect((arrayResult as any)?.data ?? arrayResult).toBe("array");
-    expect((objectResult as any)?.data ?? objectResult).toBe("object");
+    expect((objectResult as { data?: unknown })?.data ?? objectResult).toBe(
+      "object",
+    );
   });
 
   test("should show array-registered tools in getAllAvailableTools", async () => {
@@ -335,7 +340,8 @@ describe("Unified Tool Registration", () => {
     });
 
     // Extract data from ToolResult object
-    const analyticsData = (analyticsResult as any)?.data ?? analyticsResult;
+    const analyticsData =
+      (analyticsResult as { data?: unknown })?.data ?? analyticsResult;
     expect(analyticsData).toEqual({
       merchantId: "MERCH123",
       period: {
@@ -356,7 +362,8 @@ describe("Unified Tool Registration", () => {
     });
 
     // Extract data from ToolResult object
-    const paymentData = (paymentResult as any)?.data ?? paymentResult;
+    const paymentData =
+      (paymentResult as { data?: unknown })?.data ?? paymentResult;
     expect(paymentData).toMatchObject({
       status: "success",
       amount: 100.5,

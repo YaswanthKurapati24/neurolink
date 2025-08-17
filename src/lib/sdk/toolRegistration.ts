@@ -18,8 +18,6 @@ import { createMCPServerInfo } from "../utils/mcpDefaults.js";
 import {
   validateToolName,
   validateToolDescription,
-  ValidationError,
-  createValidationSummary,
 } from "../utils/parameterValidation.js";
 
 /**
@@ -207,7 +205,9 @@ export function createMCPServerFromTools(
 /**
  * Helper to create a tool with type safety
  */
-export function createTool<TParams = ToolArgs>(config: SimpleTool): SimpleTool {
+export function createTool<_TParams = ToolArgs>(
+  config: SimpleTool,
+): SimpleTool {
   return config;
 }
 
@@ -358,21 +358,32 @@ function validateToolDescriptionLegacy(
  * Validate tool configuration with detailed error messages
  */
 export function validateTool(name: string, tool: SimpleTool): void {
-  // Enhanced tool name validation using centralized utilities
   validateToolNameLegacy(name);
+  validateToolObject(name, tool);
+  validateToolDescriptionLegacy(name, tool.description);
+  validateExecuteFunction(name, tool);
+  checkSchemaPropertyMistake(name, tool);
+  validateParametersSchema(name, tool);
+  validateToolMetadata(name, tool);
+  logValidationSuccess(name, tool);
+}
 
-  // Validate tool object
+/**
+ * Validate tool object structure
+ */
+function validateToolObject(name: string, tool: SimpleTool): void {
   if (!tool || typeof tool !== "object") {
     throw new Error(
       `Tool '${name}' must be an object with description and execute properties. Received: ${typeof tool}. ` +
         `Expected format: { description: "Tool description", execute: async (params) => { ... } }`,
     );
   }
+}
 
-  // Enhanced description validation using centralized utilities
-  validateToolDescriptionLegacy(name, tool.description);
-
-  // Validate execute function with signature guidance
+/**
+ * Validate execute function
+ */
+function validateExecuteFunction(name: string, tool: SimpleTool): void {
   if (typeof tool.execute !== "function") {
     throw new Error(
       `Tool '${name}' must have an execute function. ` +
@@ -381,8 +392,12 @@ export function validateTool(name: string, tool: SimpleTool): void {
         `Example: { execute: async (params) => { return { success: true, data: result }; } }`,
     );
   }
+}
 
-  // Check for common mistake: using 'schema' instead of 'parameters'
+/**
+ * Check for common mistake: using 'schema' instead of 'parameters'
+ */
+function checkSchemaPropertyMistake(name: string, tool: SimpleTool): void {
   if ("schema" in tool && !("parameters" in tool)) {
     throw new Error(
       `Tool '${name}' uses 'schema' property, but NeuroLink expects 'parameters'. ` +
@@ -391,85 +406,164 @@ export function validateTool(name: string, tool: SimpleTool): void {
         `See documentation: https://docs.neurolink.com/tools`,
     );
   }
+}
 
-  // Validate parameters schema if provided - support both Zod and custom schemas
-  if (tool.parameters) {
-    if (typeof tool.parameters !== "object") {
-      throw new Error(
-        `Tool '${name}' parameters must be an object. ` +
-          `Received: ${typeof tool.parameters}`,
-      );
-    }
-
-    // Check for common schema validation methods (Zod uses 'parse', others might use 'validate')
-    const params = tool.parameters as unknown as Record<string, unknown>;
-    const hasValidationMethod =
-      typeof params.parse === "function" ||
-      typeof params.validate === "function" ||
-      "_def" in params; // Zod schemas have _def property
-
-    // Check for plain JSON schema objects (common mistake)
-    if ("type" in params && "properties" in params && !hasValidationMethod) {
-      throw new Error(
-        `Tool '${name}' appears to use a plain JSON schema object as parameters. ` +
-          `NeuroLink requires a Zod schema for proper type validation and tool integration. ` +
-          `Please change from:\n` +
-          `  { type: 'object', properties: { ... } }\n` +
-          `To:\n` +
-          `  z.object({ fieldName: z.string() })\n` +
-          `Import Zod with: import { z } from 'zod'`,
-      );
-    }
-
-    if (!hasValidationMethod) {
-      const errorMessage =
-        typeof params.parse === "function" || "_def" in params
-          ? `Tool '${name}' has a Zod-like schema but validation failed. Ensure it's a valid Zod schema: z.object({ ... })`
-          : typeof params.validate === "function"
-            ? `Tool '${name}' has a validate method but it may not be callable. Ensure: { parameters: { validate: (data) => { ... } } }`
-            : `Tool '${name}' parameters must be a schema object with validation. ` +
-              `Supported formats:\n` +
-              `• Zod schema: { parameters: z.object({ value: z.string() }) }\n` +
-              `• Custom schema: { parameters: { validate: (data) => { ... } } }\n` +
-              `• Custom schema: { parameters: { parse: (data) => { ... } } }`;
-
-      throw new Error(errorMessage);
-    }
+/**
+ * Validate parameters schema
+ */
+function validateParametersSchema(name: string, tool: SimpleTool): void {
+  if (!tool.parameters) {
+    return;
   }
 
-  // Validate metadata if provided
-  if (tool.metadata) {
-    if (typeof tool.metadata !== "object" || Array.isArray(tool.metadata)) {
-      throw new Error(
-        `Tool '${name}' metadata must be an object. Received: ${typeof tool.metadata}. ` +
-          `Example: { category: "data", version: "1.0.0", author: "team@company.com" }`,
-      );
-    }
-
-    // Validate metadata fields
-    if (tool.metadata.version && typeof tool.metadata.version !== "string") {
-      throw new Error(
-        `Tool '${name}' metadata.version must be a string. Received: ${typeof tool.metadata.version}. ` +
-          `Example: "1.0.0", "2.1.3-beta"`,
-      );
-    }
-
-    if (tool.metadata.category && typeof tool.metadata.category !== "string") {
-      throw new Error(
-        `Tool '${name}' metadata.category must be a string. Received: ${typeof tool.metadata.category}. ` +
-          `Example: "data", "communication", "utility"`,
-      );
-    }
-
-    if (tool.metadata.tags && !Array.isArray(tool.metadata.tags)) {
-      throw new Error(
-        `Tool '${name}' metadata.tags must be an array of strings. Received: ${typeof tool.metadata.tags}. ` +
-          `Example: ["api", "external", "web"]`,
-      );
-    }
+  if (typeof tool.parameters !== "object") {
+    throw new Error(
+      `Tool '${name}' parameters must be an object. ` +
+        `Received: ${typeof tool.parameters}`,
+    );
   }
 
-  // Success feedback for debugging
+  const params = tool.parameters as unknown as Record<string, unknown>;
+  validateSchemaValidationMethods(name, params);
+}
+
+/**
+ * Validate schema validation methods
+ */
+function validateSchemaValidationMethods(
+  name: string,
+  params: Record<string, unknown>,
+): void {
+  const hasValidationMethod = checkForValidationMethod(params);
+
+  if (isPlainJsonSchema(params) && !hasValidationMethod) {
+    throwPlainJsonSchemaError(name);
+  }
+
+  if (!hasValidationMethod) {
+    throwMissingValidationMethodError(name, params);
+  }
+}
+
+/**
+ * Check for validation methods in schema
+ */
+function checkForValidationMethod(params: Record<string, unknown>): boolean {
+  return (
+    typeof params.parse === "function" ||
+    typeof params.validate === "function" ||
+    "_def" in params
+  );
+}
+
+/**
+ * Check if this is a plain JSON schema
+ */
+function isPlainJsonSchema(params: Record<string, unknown>): boolean {
+  return "type" in params && "properties" in params;
+}
+
+/**
+ * Throw error for plain JSON schema usage
+ */
+function throwPlainJsonSchemaError(name: string): void {
+  throw new Error(
+    `Tool '${name}' appears to use a plain JSON schema object as parameters. ` +
+      `NeuroLink requires a Zod schema for proper type validation and tool integration. ` +
+      `Please change from:\n` +
+      `  { type: 'object', properties: { ... } }\n` +
+      `To:\n` +
+      `  z.object({ fieldName: z.string() })\n` +
+      `Import Zod with: import { z } from 'zod'`,
+  );
+}
+
+/**
+ * Throw error for missing validation method
+ */
+function throwMissingValidationMethodError(
+  name: string,
+  params: Record<string, unknown>,
+): void {
+  const errorMessage = generateValidationMethodErrorMessage(name, params);
+  throw new Error(errorMessage);
+}
+
+/**
+ * Generate validation method error message
+ */
+function generateValidationMethodErrorMessage(
+  name: string,
+  params: Record<string, unknown>,
+): string {
+  if (typeof params.parse === "function" || "_def" in params) {
+    return `Tool '${name}' has a Zod-like schema but validation failed. Ensure it's a valid Zod schema: z.object({ ... })`;
+  }
+
+  if (typeof params.validate === "function") {
+    return `Tool '${name}' has a validate method but it may not be callable. Ensure: { parameters: { validate: (data) => { ... } } }`;
+  }
+
+  return (
+    `Tool '${name}' parameters must be a schema object with validation. ` +
+    `Supported formats:\n` +
+    `• Zod schema: { parameters: z.object({ value: z.string() }) }\n` +
+    `• Custom schema: { parameters: { validate: (data) => { ... } } }\n` +
+    `• Custom schema: { parameters: { parse: (data) => { ... } } }`
+  );
+}
+
+/**
+ * Validate tool metadata
+ */
+function validateToolMetadata(name: string, tool: SimpleTool): void {
+  if (!tool.metadata) {
+    return;
+  }
+
+  if (typeof tool.metadata !== "object" || Array.isArray(tool.metadata)) {
+    throw new Error(
+      `Tool '${name}' metadata must be an object. Received: ${typeof tool.metadata}. ` +
+        `Example: { category: "data", version: "1.0.0", author: "team@company.com" }`,
+    );
+  }
+
+  validateMetadataFields(name, tool.metadata);
+}
+
+/**
+ * Validate metadata fields
+ */
+function validateMetadataFields(
+  name: string,
+  metadata: Record<string, unknown>,
+): void {
+  if (metadata.version && typeof metadata.version !== "string") {
+    throw new Error(
+      `Tool '${name}' metadata.version must be a string. Received: ${typeof metadata.version}. ` +
+        `Example: "1.0.0", "2.1.3-beta"`,
+    );
+  }
+
+  if (metadata.category && typeof metadata.category !== "string") {
+    throw new Error(
+      `Tool '${name}' metadata.category must be a string. Received: ${typeof metadata.category}. ` +
+        `Example: "data", "communication", "utility"`,
+    );
+  }
+
+  if (metadata.tags && !Array.isArray(metadata.tags)) {
+    throw new Error(
+      `Tool '${name}' metadata.tags must be an array of strings. Received: ${typeof metadata.tags}. ` +
+        `Example: ["api", "external", "web"]`,
+    );
+  }
+}
+
+/**
+ * Log validation success
+ */
+function logValidationSuccess(name: string, tool: SimpleTool): void {
   logger.debug(`Tool '${name}' validation passed`, {
     nameLength: name.length,
     descriptionLength: tool.description.length,

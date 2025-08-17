@@ -305,7 +305,7 @@ export class ConfigManager {
           name: "temperature",
           message: "Default creativity level (0.0 = focused, 1.0 = creative):",
           default: this.config.preferences.temperature,
-          validate: (value: number) => value >= 0 && value <= 2,
+          validate: (value: number): boolean => value >= 0 && value <= 2,
         },
         {
           type: "list",
@@ -451,7 +451,7 @@ export class ConfigManager {
         type: "password",
         name: "apiKey",
         message: "OpenAI API Key (sk-...):",
-        validate: (value: string) =>
+        validate: (value: string): boolean | string =>
           value.startsWith("sk-") || 'API key should start with "sk-"',
       },
       {
@@ -544,7 +544,7 @@ export class ConfigManager {
         type: "input",
         name: "projectId",
         message: "Google Cloud Project ID:",
-        validate: (value: string) =>
+        validate: (value: string): boolean | string =>
           value.length > 0 || "Project ID is required",
       },
       {
@@ -571,7 +571,7 @@ export class ConfigManager {
             type: "input",
             name: "credentials",
             message: "Path to service account JSON file:",
-            validate: (value: string) =>
+            validate: (value: string): boolean | string =>
               fs.existsSync(value) || "File does not exist",
           },
         ]);
@@ -585,7 +585,7 @@ export class ConfigManager {
             type: "input",
             name: "serviceAccountKey",
             message: "Service account JSON string:",
-            validate: (value: string) => {
+            validate: (value: string): boolean | string => {
               try {
                 JSON.parse(value);
                 return true;
@@ -605,7 +605,7 @@ export class ConfigManager {
             type: "input",
             name: "clientEmail",
             message: "Service account email:",
-            validate: (value: string) =>
+            validate: (value: string): boolean | string =>
               value.includes("@") || "Invalid email format",
           },
           {
@@ -639,7 +639,8 @@ export class ConfigManager {
         type: "password",
         name: "apiKey",
         message: "Anthropic API Key:",
-        validate: (value: string) => value.length > 0 || "API key is required",
+        validate: (value: string): boolean | string =>
+          value.length > 0 || "API key is required",
       },
       {
         type: "list",
@@ -671,7 +672,7 @@ export class ConfigManager {
         type: "input",
         name: "endpoint",
         message: "Azure OpenAI Endpoint:",
-        validate: (value: string) =>
+        validate: (value: string): boolean | string =>
           value.startsWith("https://") || "Endpoint should start with https://",
       },
       {
@@ -700,7 +701,8 @@ export class ConfigManager {
         type: "password",
         name: "apiKey",
         message: "Google AI API Key:",
-        validate: (value: string) => value.length > 0 || "API key is required",
+        validate: (value: string): boolean | string =>
+          value.length > 0 || "API key is required",
       },
       {
         type: "list",
@@ -745,7 +747,7 @@ export class ConfigManager {
         name: "baseUrl",
         message: "Ollama base URL:",
         default: "http://localhost:11434",
-        validate: (value: string) =>
+        validate: (value: string): boolean | string =>
           value.startsWith("http") ||
           "URL should start with http:// or https://",
       },
@@ -760,7 +762,8 @@ export class ConfigManager {
         name: "timeout",
         message: "Request timeout (milliseconds):",
         default: 60000,
-        validate: (value: number) => value > 0 || "Timeout must be positive",
+        validate: (value: number): boolean | string =>
+          value > 0 || "Timeout must be positive",
       },
     ]);
 
@@ -776,7 +779,8 @@ export class ConfigManager {
         type: "password",
         name: "apiKey",
         message: "Mistral AI API Key:",
-        validate: (value: string) => value.length > 0 || "API key is required",
+        validate: (value: string): boolean | string =>
+          value.length > 0 || "API key is required",
       },
       {
         type: "list",

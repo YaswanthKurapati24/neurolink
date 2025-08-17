@@ -81,7 +81,12 @@ export function createProxyFetch(): typeof fetch {
 /**
  * Get proxy status information
  */
-export function getProxyStatus() {
+export function getProxyStatus(): {
+  enabled: boolean;
+  httpProxy: string | null;
+  httpsProxy: string | null;
+  method: string;
+} {
   const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy;
   const httpProxy = process.env.HTTP_PROXY || process.env.http_proxy;
 

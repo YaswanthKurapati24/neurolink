@@ -139,12 +139,6 @@ export class DynamicModelProvider {
       // Setup timeout and abort controller
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      // Load from URL
-      const response = await fetch(source, {
-        headers: {
-          "User-Agent": "NeuroLink/1.0 (+https://github.com/juspay/neurolink)",
-        },
-      });
 
       try {
         // Add health check for localhost before attempting full request
@@ -155,7 +149,7 @@ export class DynamicModelProvider {
         const response = await fetch(source, {
           headers: {
             "User-Agent":
-              "NeuroLink/1.0 (+https://github.com/sachinsharma92/neurolink)",
+              "NeuroLink/1.0 (+https://github.com/juspay/neurolink)",
             Accept: "application/json",
             "Cache-Control": "no-cache",
           },
@@ -186,7 +180,7 @@ export class DynamicModelProvider {
           reject(new Error(`File read timeout after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        (async () => {
+        (async (): Promise<void> => {
           try {
             const fs = await import("fs");
             const path = await import("path");
@@ -330,9 +324,11 @@ export class DynamicModelProvider {
       config: ModelConfig;
     }> = [];
 
-    for (const [providerName, models] of Object.entries(
-      this.modelRegistry!.models,
-    )) {
+    // After ensureInitialized(), modelRegistry is guaranteed to be non-null
+    const registry = this.modelRegistry as NonNullable<
+      typeof this.modelRegistry
+    >;
+    for (const [providerName, models] of Object.entries(registry.models)) {
       if (options.provider && providerName !== options.provider) {
         continue;
       }
@@ -434,9 +430,11 @@ export class DynamicModelProvider {
       config: ModelConfig;
     }> = [];
 
-    for (const [providerName, models] of Object.entries(
-      this.modelRegistry!.models,
-    )) {
+    // After ensureInitialized(), modelRegistry is guaranteed to be non-null
+    const registry = this.modelRegistry as NonNullable<
+      typeof this.modelRegistry
+    >;
+    for (const [providerName, models] of Object.entries(registry.models)) {
       for (const [modelName, modelConfig] of Object.entries(models)) {
         results.push({
           provider: providerName,

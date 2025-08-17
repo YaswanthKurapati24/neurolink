@@ -31,16 +31,6 @@ interface ToolImplementation {
   permissions?: string[];
 }
 
-interface ServerRegistration {
-  id?: string;
-  serverId?: string;
-  description?: string;
-  title?: string;
-  category?: string;
-  tools?: Record<string, ToolImplementation>;
-  configuration?: Record<string, unknown>;
-}
-
 // Use the compatible ToolResult from factory.ts
 export type ToolExecutionResult = ToolResult;
 
@@ -161,12 +151,12 @@ export class MCPToolRegistry extends MCPRegistry {
   ): Promise<void> {
     // Handle both signatures for backward compatibility
     let serverInfo: MCPServerInfo;
-    let finalContext: ExecutionContext | undefined;
+    let _finalContext: ExecutionContext | undefined;
 
     if (typeof serverInfoOrId === "string") {
       // Legacy signature: registerServer(serverId, serverConfig, context)
       const serverId = serverInfoOrId;
-      finalContext = context;
+      _finalContext = context;
 
       // Convert legacy call to MCPServerInfo format using smart defaults
       serverInfo = createMCPServerInfo({
@@ -178,7 +168,7 @@ export class MCPToolRegistry extends MCPRegistry {
     } else {
       // New signature: registerServer(serverInfo, context)
       serverInfo = serverInfoOrId;
-      finalContext = serverConfigOrContext as ExecutionContext | undefined;
+      _finalContext = serverConfigOrContext as ExecutionContext | undefined;
     }
     const serverId = serverInfo.id;
     registryLogger.info(`Registering MCPServerInfo directly: ${serverId}`);
@@ -189,7 +179,7 @@ export class MCPToolRegistry extends MCPRegistry {
       toolsObject[tool.name] = {
         execute:
           tool.execute ||
-          (async () => {
+          (async (): Promise<unknown> => {
             throw new Error(`Tool ${tool.name} has no execute function`);
           }),
         description: tool.description,
@@ -249,7 +239,7 @@ export class MCPToolRegistry extends MCPRegistry {
       this.toolImpls.set(toolId, {
         execute:
           tool.execute ||
-          (async () => {
+          (async (): Promise<unknown> => {
             throw new Error(`Tool ${tool.name} has no execute function`);
           }),
         description: tool.description,
@@ -515,10 +505,11 @@ export class MCPToolRegistry extends MCPRegistry {
       }
 
       if (filter.permissions && filter.permissions.length > 0) {
+        const filterPermissions = filter.permissions; // TypeScript type narrowing
         result = result.filter((tool) => {
           const toolPermissions =
             (tool as ToolInfo & { permissions?: string[] }).permissions || [];
-          return filter.permissions!.some((perm) =>
+          return filterPermissions.some((perm) =>
             toolPermissions.includes(perm),
           );
         });
@@ -674,9 +665,9 @@ export class MCPToolRegistry extends MCPRegistry {
         },
       );
       // Create minimal validation functions
-      validateTool = () => {}; // No-op
-      isToolNameAvailable = () => true; // Allow all names
-      suggestToolNames = () => ["alternative_tool"];
+      validateTool = (): void => {}; // No-op
+      isToolNameAvailable = (): boolean => true; // Allow all names
+      suggestToolNames = (): string[] => ["alternative_tool"];
     }
 
     // Check if tool name is available (not reserved)
@@ -694,7 +685,7 @@ export class MCPToolRegistry extends MCPRegistry {
     // Create a simplified tool object for validation
     const toolForValidation = {
       description: toolInfo.description || "",
-      execute: async () => "" as JsonValue,
+      execute: async (): Promise<JsonValue> => "" as JsonValue,
       parameters: undefined as ZodUnknownSchema | undefined,
       metadata: {
         category: toolInfo.category,

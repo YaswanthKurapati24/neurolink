@@ -7,15 +7,7 @@
 import type { CommandModule, Argv } from "yargs";
 import type { AIProviderName } from "../../lib/core/types.js";
 import type { UnknownRecord } from "../../lib/types/common.js";
-import type { ModelsCommandArgs } from "../../lib/types/cli.js";
-import type {
-  ModelCapability,
-  ModelUseCase,
-  ModelFilter,
-  ModelResolutionContext,
-  ModelStats,
-  ModelPricing,
-} from "../../lib/types/providers.js";
+import type { ModelPricing } from "../../lib/types/providers.js";
 import {
   ModelResolver,
   formatSearchResults,
@@ -24,8 +16,6 @@ import {
 } from "../../lib/models/modelResolver.js";
 import {
   getAllModels,
-  getModelsByProvider,
-  getAvailableProviders,
   formatModelForDisplay,
   type ModelSearchFilters,
   type ModelCapabilities,
@@ -155,7 +145,7 @@ export class ModelsCommandFactory {
     return {
       command: "models <subcommand>",
       describe: "Manage and discover AI models",
-      builder: (yargs) => {
+      builder: (yargs: Argv): Argv => {
         return yargs
           .command(
             "list",
@@ -216,7 +206,7 @@ export class ModelsCommandFactory {
           .demandCommand(1, "Please specify a models subcommand")
           .help();
       },
-      handler: () => {
+      handler: (): void => {
         // No-op handler as subcommands handle everything
       },
     };
@@ -493,9 +483,9 @@ export class ModelsCommandFactory {
         models = models.filter((model) => model.category === argv.category);
       }
 
-      if (argv.capability) {
+      if (argv.capability && argv.capability.length > 0) {
         models = models.filter((model) => {
-          return argv.capability!.every(
+          return (argv.capability ?? []).every(
             (cap) => model.capabilities[cap as keyof typeof model.capabilities],
           );
         });
@@ -753,7 +743,12 @@ export class ModelsCommandFactory {
     argv: Extended_ModelsCommandArgs,
   ): Promise<void> {
     try {
-      const query = argv.model!;
+      if (!argv.model) {
+        logger.error(chalk.red("❌ Model name is required"));
+        process.exit(1);
+      }
+
+      const query = argv.model;
       const model = ModelResolver.resolveModel(query);
 
       if (!model) {
@@ -808,7 +803,14 @@ export class ModelsCommandFactory {
     argv: Extended_ModelsCommandArgs,
   ): Promise<void> {
     try {
-      const modelIds = argv.models!;
+      if (!argv.models || argv.models.length === 0) {
+        logger.error(
+          chalk.red("❌ At least one model is required for comparison"),
+        );
+        process.exit(1);
+      }
+
+      const modelIds = argv.models;
       const comparison = ModelResolver.compareModels(modelIds);
 
       if (argv.format === "json") {

@@ -54,7 +54,7 @@ export interface UnifiedEvaluationContext {
 }
 
 // Zod schema for validation
-const UnifiedEvaluationSchema = z.object({
+const _UnifiedEvaluationSchema = z.object({
   relevance: z.number().min(1).max(10),
   accuracy: z.number().min(1).max(10),
   completeness: z.number().min(1).max(10),
@@ -118,7 +118,7 @@ function getDefaultUnifiedEvaluation(
  */
 function parseUnifiedEvaluationResult(
   response: string,
-  context: UnifiedEvaluationContext,
+  _context: UnifiedEvaluationContext,
 ): Partial<UnifiedEvaluationResult> {
   const functionTag = "parseUnifiedEvaluationResult";
 
@@ -133,8 +133,12 @@ function parseUnifiedEvaluationResult(
       try {
         const parsed = JSON.parse(jsonMatch[0]);
         return parsed;
-      } catch (e) {
-        logger.debug(`[${functionTag}] JSON parsing failed, trying regex`);
+      } catch (jsonError) {
+        logger.debug(`[${functionTag}] JSON parsing failed, trying regex`, {
+          error:
+            jsonError instanceof Error ? jsonError.message : String(jsonError),
+          jsonString: jsonMatch[0].substring(0, 100) + "...",
+        });
       }
     }
 
@@ -325,9 +329,9 @@ export async function evaluateResponse(
   responseOrContext: unknown,
   contextOrUserQuery?: unknown,
   userQuery?: unknown,
-  providedContexts?: unknown,
-  options?: unknown,
-  additionalArgs?: unknown,
+  _providedContexts?: unknown,
+  _options?: unknown,
+  _additionalArgs?: unknown,
 ): Promise<unknown> {
   // Handle different call patterns for backward compatibility
   let aiResponse: string;

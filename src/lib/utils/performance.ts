@@ -83,17 +83,18 @@ export class PerformanceTracker {
    */
   formatMetrics(operationName: string): string {
     const metric = this.metrics.get(operationName);
-    if (!metric || !metric.duration) {
+    if (!metric || !metric.duration || !metric.memoryDelta) {
       return `${operationName}: No metrics available`;
     }
 
-    const memoryMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+    const memoryMB = (bytes: number): string =>
+      (bytes / 1024 / 1024).toFixed(1);
 
     return [
       `${operationName}:`,
       `  Duration: ${metric.duration}ms`,
-      `  Memory Delta: +${memoryMB(metric.memoryDelta!.heapUsed)}MB heap`,
-      `  RSS Delta: +${memoryMB(metric.memoryDelta!.rss)}MB`,
+      `  Memory Delta: +${memoryMB(metric.memoryDelta.heapUsed)}MB heap`,
+      `  RSS Delta: +${memoryMB(metric.memoryDelta.rss)}MB`,
     ].join("\n");
   }
 }
@@ -192,8 +193,11 @@ export function trackPerformance(operationName: string) {
     target: unknown,
     propertyName: string,
     descriptor: TypedPropertyDescriptor<T>,
-  ) {
-    const method = descriptor.value!;
+  ): TypedPropertyDescriptor<T> {
+    const method = descriptor.value;
+    if (!method) {
+      throw new Error("Method descriptor value is undefined");
+    }
 
     descriptor.value = async function (this: unknown, ...args: unknown[]) {
       globalTracker.start(operationName);

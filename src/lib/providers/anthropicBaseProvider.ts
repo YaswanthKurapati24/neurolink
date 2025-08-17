@@ -1,19 +1,11 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { ZodType, ZodTypeDef } from "zod";
-import { streamText, Output, type Schema, type LanguageModelV1 } from "ai";
-import type {
-  AIProviderName,
-  TextGenerationOptions,
-  EnhancedGenerateResult,
-} from "../core/types.js";
+import { streamText, type Schema, type LanguageModelV1 } from "ai";
+import type { AIProviderName } from "../core/types.js";
 import type { StreamOptions, StreamResult } from "../types/streamTypes.js";
 import { BaseProvider } from "../core/baseProvider.js";
 import { logger } from "../utils/logger.js";
-import {
-  createTimeoutController,
-  TimeoutError,
-  getDefaultTimeout,
-} from "../utils/timeout.js";
+import { TimeoutError, createTimeoutController } from "../utils/timeout.js";
 import { DEFAULT_MAX_TOKENS } from "../core/constants.js";
 import {
   validateApiKey,
@@ -94,7 +86,7 @@ export class AnthropicProviderV2 extends BaseProvider {
 
   protected async executeStream(
     options: StreamOptions,
-    analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
+    _analysisSchema?: ZodType<unknown, ZodTypeDef, unknown> | Schema<unknown>,
   ): Promise<StreamResult> {
     // Note: StreamOptions validation handled differently than TextGenerationOptions
 
@@ -124,7 +116,11 @@ export class AnthropicProviderV2 extends BaseProvider {
       timeoutController?.cleanup();
 
       // Transform string stream to content object stream (match Google AI pattern)
-      const transformedStream = async function* () {
+      const transformedStream = async function* (): AsyncGenerator<
+        { content: string },
+        void,
+        unknown
+      > {
         for await (const chunk of result.textStream) {
           yield { content: chunk };
         }

@@ -17,10 +17,7 @@ import { handleSageMakerError } from "./errors.js";
 import { estimateTokenUsage, createSageMakerStream } from "./streaming.js";
 import type { SageMakerConfig, SageMakerModelConfig } from "./types.js";
 import type { ConnectivityResult } from "../../types/typeAliases.js";
-import {
-  AdaptiveSemaphore,
-  createAdaptiveSemaphore,
-} from "./adaptive-semaphore.js";
+import { createAdaptiveSemaphore } from "./adaptive-semaphore.js";
 import { logger } from "../../utils/logger.js";
 import type { UnknownRecord } from "../../types/common.js";
 
@@ -470,7 +467,7 @@ export class SageMakerLanguageModel implements LanguageModelV1 {
 
         // Create synthetic stream from complete result using async iterator pattern
         const syntheticStream = new ReadableStream<LanguageModelV1StreamPart>({
-          async start(controller) {
+          async start(controller): Promise<void> {
             try {
               // Create async iterator for text chunks
               const textChunks = createTextChunkIterator(result.text);
@@ -816,13 +813,20 @@ export class SageMakerLanguageModel implements LanguageModelV1 {
   /**
    * Get model configuration summary for debugging
    */
-  public getModelInfo() {
+  public getModelInfo(): {
+    modelId: string;
+    provider: string;
+    specificationVersion: string;
+    endpointName: string;
+    modelType: string;
+    region: string;
+  } {
     return {
       modelId: this.modelId,
       provider: this.provider,
       specificationVersion: this.specificationVersion,
       endpointName: this.modelConfig.endpointName,
-      modelType: this.modelConfig.modelType,
+      modelType: this.modelConfig.modelType || "custom",
       region: this.config.region,
     };
   }
@@ -1072,7 +1076,25 @@ export class SageMakerLanguageModel implements LanguageModelV1 {
   /**
    * Enhanced model information with batch capabilities
    */
-  public getModelCapabilities() {
+  public getModelCapabilities(): {
+    modelId: string;
+    provider: string;
+    specificationVersion: string;
+    endpointName: string;
+    modelType: string;
+    region: string;
+    capabilities: {
+      streaming: boolean;
+      toolCalling: boolean;
+      structuredOutput: boolean;
+      batchInference: boolean;
+      supportedResponseFormats: string[];
+      supportedToolTypes: string[];
+      maxBatchSize: number;
+      adaptiveConcurrency: boolean;
+      errorRecovery: boolean;
+    };
+  } {
     return {
       ...this.getModelInfo(),
       capabilities: {

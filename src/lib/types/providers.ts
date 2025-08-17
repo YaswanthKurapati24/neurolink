@@ -3,7 +3,6 @@
  */
 
 import type { UnknownRecord, JsonValue } from "./common.js";
-import type { ToolResult, ToolArgs } from "./tools.js";
 
 /**
  * Generic AI SDK model interface

@@ -94,15 +94,15 @@ export default [
       "@typescript-eslint/no-explicit-any": "error", // Error on any types - enforce strict typing
       "@typescript-eslint/prefer-as-const": "error",
       "@typescript-eslint/no-non-null-assertion": "warn", // Warn about non-null assertions but don't block builds
-      "@typescript-eslint/explicit-function-return-type": "off", // Too many to fix immediately
+      "@typescript-eslint/explicit-function-return-type": "error", // Enforce explicit return types
 
       // Enhanced type safety (basic rules only)
 
-      // Code quality gates (relaxed for existing codebase)
-      complexity: ["warn", 25], // Warn instead of error for large functions
-      "max-depth": ["warn", 6], // Warn instead of error for deeply nested code
-      "max-lines-per-function": ["warn", 300], // Warn for very large functions
-      "max-params": ["warn", 6], // Warn for too many parameters
+      // Code quality gates (strict enforcement)
+      complexity: ["error", 25], // Error for large functions
+      "max-depth": ["error", 6], // Error for deeply nested code
+      "max-lines-per-function": ["error", 300], // Error for very large functions
+      "max-params": ["error", 6], // Error for too many parameters
 
       // Security rules
       "no-eval": "error",
