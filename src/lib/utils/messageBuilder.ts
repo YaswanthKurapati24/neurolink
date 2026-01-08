@@ -40,6 +40,13 @@ import type { GenerateOptions } from "../types/generateTypes.js";
 import type { TextGenerationOptions } from "../types/index.js";
 import type { Content, ImageWithAltText } from "../types/multimodal.js";
 import type { StreamOptions } from "../types/streamTypes.js";
+import { CONVERSATION_INSTRUCTIONS } from "../config/conversationMemory.js";
+import { createUnifiedSchemaInstructions } from "./structuredOutput.js";
+import {
+  ProviderImageAdapter,
+  MultimodalLogger,
+} from "../adapters/providerImageAdapter.js";
+import { logger } from "./logger.js";
 import { FileDetector } from "./fileDetector.js";
 import { getImageCache } from "./imageCache.js";
 import { logger } from "./logger.js";
@@ -557,8 +564,11 @@ function formatCSVMetadata(metadata: {
 /**
  * Check if structured output mode should be enabled
  * Structured output is used when a schema is provided with json/structured format
+ *
+ * @param options - Options object with schema and optional output format
+ * @returns true if structured output should be used
  */
-function shouldUseStructuredOutput(options: {
+export function shouldUseStructuredOutput(options: {
   schema?: unknown;
   output?: { format?: string };
 }): boolean {
@@ -593,8 +603,8 @@ export async function buildMessagesArray(
   }
 
   // Add structured output instructions when schema is provided with json/structured format
-  if (shouldUseStructuredOutput(options)) {
-    systemPrompt = `${systemPrompt.trim()}${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
+  if (shouldUseStructuredOutput(options) && options.schema) {
+    systemPrompt = `${systemPrompt}${createUnifiedSchemaInstructions(options.schema)}`;
   }
 
   // Add system message if we have one
@@ -1184,8 +1194,9 @@ function buildMultimodalSystemPrompt(
     systemPrompt = `${systemPrompt.trim()}${CONVERSATION_INSTRUCTIONS}`;
   }
 
-  if (shouldUseStructuredOutput(options)) {
-    systemPrompt = `${systemPrompt.trim()}${STRUCTURED_OUTPUT_INSTRUCTIONS}`;
+  // Add structured output instructions when schema is provided with json/structured format
+  if (shouldUseStructuredOutput(options) && options.schema) {
+    systemPrompt = `${systemPrompt}${createUnifiedSchemaInstructions(options.schema)}`;
   }
 
   const hasCSVFiles =
